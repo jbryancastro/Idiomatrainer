@@ -16,6 +16,8 @@ export default function RootLayout() {
         <Stack.Screen name="index" />
         <Stack.Screen name="explore" />
         <Stack.Screen name="create-account" />
+        <Stack.Screen name="login" />
+        <Stack.Screen name="reset-password" />
         <Stack.Screen name="objetive" />
         <Stack.Screen name="idioma" />
         <Stack.Screen name="level" />

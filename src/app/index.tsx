@@ -1,15 +1,99 @@
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Google from 'expo-auth-session/providers/google';
 import { router } from 'expo-router';
+import * as WebBrowser from 'expo-web-browser';
+import { useEffect } from 'react';
 import {
-  Image,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View
+    Alert,
+    Image,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+WebBrowser.maybeCompleteAuthSession();
+
+const GOOGLE_CLIENT_ID_PLACEHOLDER = 'google-client-id-not-configured';
+
 export default function WelcomeScreen() {
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    androidClientId:
+      process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID || GOOGLE_CLIENT_ID_PLACEHOLDER,
+    iosClientId:
+      process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || GOOGLE_CLIENT_ID_PLACEHOLDER,
+    webClientId:
+      process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || GOOGLE_CLIENT_ID_PLACEHOLDER,
+    selectAccount: true,
+  });
+
+  const hasGoogleClientId =
+    Platform.OS === 'web'
+      ? Boolean(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID)
+      : Platform.OS === 'android'
+        ? Boolean(process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID)
+        : Boolean(process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID);
+
+  useEffect(() => {
+    if (response?.type === 'success') {
+      router.replace('/explore');
+    }
+  }, [response]);
+
+  const handleGoogleLogin = async () => {
+    if (!request || !hasGoogleClientId) {
+      const message =
+        'Añade el Client ID de Google en .env.local y reinicia Expo.';
+
+      if (Platform.OS === 'web') {
+        window.alert(`Google no está configurado.\n\n${message}`);
+      } else {
+        Alert.alert('Google no está configurado', message);
+      }
+      return;
+    }
+
+    await promptAsync();
+  };
+
+  const handleAppleLogin = async () => {
+    if (Platform.OS === 'web') {
+      window.alert(
+        'Apple requiere configuración adicional para la web.\n\n' +
+          'Crea un Service ID en Apple Developer y conecta un backend para completar el inicio de sesión.'
+      );
+      return;
+    }
+
+    if (!(await AppleAuthentication.isAvailableAsync())) {
+      Alert.alert(
+        'Apple no está disponible',
+        'Inicia esta aplicación en un dispositivo Apple compatible.'
+      );
+      return;
+    }
+
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
+
+      if (credential.identityToken) {
+        router.replace('/explore');
+      }
+    } catch (error: unknown) {
+      if ((error as { code?: string }).code !== 'ERR_REQUEST_CANCELED') {
+        Alert.alert('No se pudo iniciar sesión', 'Inténtalo nuevamente.');
+      }
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
@@ -62,7 +146,11 @@ export default function WelcomeScreen() {
         </View>
 
         {/* SOCIAL LOGIN */}
-        <TouchableOpacity style={styles.socialButton}>
+        <TouchableOpacity
+          style={styles.socialButton}
+          onPress={handleGoogleLogin}
+          activeOpacity={0.7}
+        >
           <Image
             source={require('../../img/google logo.png')}
             style={styles.socialIcon}
@@ -71,7 +159,11 @@ export default function WelcomeScreen() {
           <Text style={styles.socialButtonText}>CONTINUAR CON GOOGLE</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.socialButton}>
+        <TouchableOpacity
+          style={styles.socialButton}
+          onPress={handleAppleLogin}
+          activeOpacity={0.7}
+        >
            <Image
             source={require('../../img/apple logo.png')}
             style={styles.socialIcon}
@@ -97,7 +189,10 @@ export default function WelcomeScreen() {
 
         {/* LOGIN LINK */}
         <Text style={styles.loginPrompt}>
-          ¿Ya tienes cuenta? <Text style={styles.loginLink}>Iniciar sesión</Text>
+          ¿Ya tienes cuenta?{' '}
+          <Text style={styles.loginLink} onPress={() => router.push('/login')}>
+            Iniciar sesión
+          </Text>
         </Text>
 
         {/* LEGAL */}

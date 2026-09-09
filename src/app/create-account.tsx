@@ -1,12 +1,13 @@
+import { AuthRequestError, signUpWithEmail } from '@/lib/auth';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
-    ScrollView,
+    Modal, ScrollView,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    View,
+    View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -17,6 +18,73 @@ export default function CreateAccountScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(true);
+  const [alert, setAlert] = useState({
+    visible: false,
+    title: '',
+    message: '',
+  });
+  const [fieldErrors, setFieldErrors] = useState({
+    name: '',
+    email: '',
+    password: '',
+    terms: '',
+  });
+  const isValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  const handleCreateAccount = async () => {
+    const nextErrors = {
+      name: name.trim() ? '' : 'Escribe tu nombre para continuar.',
+      email: isValidEmail ? '' : 'Escribe un correo electrónico válido.',
+      password: password.length >= 6 ? '' : 'Usa una contraseña de al menos 6 caracteres.',
+      terms: acceptedTerms ? '' : 'Debes aceptar los términos y la política de privacidad.',
+    };
+
+    setFieldErrors(nextErrors);
+
+    if (Object.values(nextErrors).some(Boolean)) {
+      return;
+    }
+
+    try {
+      const result = await signUpWithEmail(email, password, name);
+
+      if (result.access_token) {
+        router.replace('/objetive');
+      } else {
+        setAlert({
+          visible: true,
+          title: 'Confirma tu correo',
+          message: 'Revisa tu bandeja de entrada para activar tu cuenta.',
+        });
+        router.replace('/login');
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : '';
+      const isRateLimited = /rate limit|too many requests|demasiados intentos/i.test(
+        errorMessage
+      );
+      const isExistingEmail =
+        !isRateLimited &&
+        error instanceof AuthRequestError &&
+        (error.status === 422 ||
+          /already registered|already exists|user_already_exists|ya está registrado/i.test(
+            errorMessage
+          ));
+
+      const title = isRateLimited
+        ? 'Demasiados intentos'
+        : isExistingEmail
+          ? 'Correo ya registrado'
+          : 'No se pudo crear la cuenta';
+      const message = isRateLimited
+        ? 'Supabase ha limitado temporalmente los correos de registro. Espera unos minutos antes de intentarlo nuevamente.'
+        : isExistingEmail
+          ? 'Este correo ya tiene una cuenta. Inicia sesión o usa otro correo.'
+          : errorMessage || 'Inténtalo nuevamente.';
+
+      setAlert({ visible: true, title, message });
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -38,45 +106,60 @@ export default function CreateAccountScreen() {
         {/* NAME FIELD */}
         <Text style={styles.label}>Nombre</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, fieldErrors.name && styles.inputError]}
           placeholder="Carlos"
           placeholderTextColor="#B0B4BA"
           value={name}
-          onChangeText={setName}
+          onChangeText={(value) => {
+            setName(value);
+            setFieldErrors((errors) => ({ ...errors, name: '' }));
+          }}
         />
+        {fieldErrors.name ? <Text style={styles.errorText}>{fieldErrors.name}</Text> : null}
 
         {/* EMAIL FIELD */}
         <Text style={styles.label}>Correo electrónico</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, fieldErrors.email && styles.inputError]}
           placeholder="ejemplo@email.com"
           placeholderTextColor="#B0B4BA"
           keyboardType="email-address"
           autoCapitalize="none"
           value={email}
-          onChangeText={setEmail}
+          onChangeText={(value) => {
+            setEmail(value);
+            setFieldErrors((errors) => ({ ...errors, email: '' }));
+          }}
         />
+        {fieldErrors.email ? <Text style={styles.errorText}>{fieldErrors.email}</Text> : null}
 
         {/* PASSWORD FIELD */}
         <Text style={styles.label}>Contraseña</Text>
-        <View style={styles.passwordRow}>
+        <View style={[styles.passwordRow, fieldErrors.password && styles.inputError]}>
           <TextInput
             style={styles.passwordInput}
             placeholder="••••••••"
             placeholderTextColor="#B0B4BA"
             secureTextEntry={!showPassword}
             value={password}
-            onChangeText={setPassword}
+            onChangeText={(value) => {
+              setPassword(value);
+              setFieldErrors((errors) => ({ ...errors, password: '' }));
+            }}
           />
           <TouchableOpacity onPress={() => setShowPassword((prev) => !prev)}>
             <Text style={styles.eyeIcon}>{showPassword ? '🙈' : '👁'}</Text>
           </TouchableOpacity>
         </View>
+        {fieldErrors.password ? <Text style={styles.errorText}>{fieldErrors.password}</Text> : null}
 
         {/* TERMS CHECKBOX */}
         <TouchableOpacity
           style={styles.termsRow}
-          onPress={() => setAcceptedTerms((prev) => !prev)}
+          onPress={() => {
+            setAcceptedTerms((prev) => !prev);
+            setFieldErrors((errors) => ({ ...errors, terms: '' }));
+          }}
         >
           <View style={[styles.checkbox, acceptedTerms && styles.checkboxChecked]}>
             {acceptedTerms && <Text style={styles.checkmark}>✓</Text>}
@@ -86,11 +169,13 @@ export default function CreateAccountScreen() {
             <Text style={styles.termsLink}>términos y política de privacidad</Text>
           </Text>
         </TouchableOpacity>
+        {fieldErrors.terms ? <Text style={styles.errorText}>{fieldErrors.terms}</Text> : null}
 
         {/* CONTINUE BUTTON */}
         <TouchableOpacity
           style={styles.continueButton}
-          onPress={() => router.push('/objetive')}
+          onPress={handleCreateAccount}
+          activeOpacity={0.8}
         >
           <Text style={styles.continueButtonText}>CONTINUAR</Text>
           <Text style={styles.continueArrow}>→</Text>
@@ -99,10 +184,30 @@ export default function CreateAccountScreen() {
         {/* LOGIN LINK */}
         <Text style={styles.loginPrompt}>
           ¿Ya tienes cuenta?{' '}
-          <Text style={styles.loginLink} onPress={() => router.back()}>
+          <Text style={styles.loginLink} onPress={() => router.push('/login')}>
             Iniciar sesión
           </Text>
         </Text>
+
+        <Modal
+          transparent
+          animationType="fade"
+          visible={alert.visible}
+          onRequestClose={() => setAlert((current) => ({ ...current, visible: false }))}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>{alert.title}</Text>
+              <Text style={styles.modalMessage}>{alert.message}</Text>
+              <TouchableOpacity
+                style={styles.modalButton}
+                onPress={() => setAlert((current) => ({ ...current, visible: false }))}
+              >
+                <Text style={styles.modalButtonText}>ACEPTAR</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </ScrollView>
     </SafeAreaView>
   );
@@ -162,6 +267,17 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#171923',
     marginBottom: 20,
+  },
+
+  inputError: {
+    borderColor: '#D64545',
+  },
+
+  errorText: {
+    color: '#D64545',
+    fontSize: 12,
+    marginTop: -14,
+    marginBottom: 16,
   },
 
   passwordRow: {
@@ -259,5 +375,57 @@ const styles = StyleSheet.create({
   loginLink: {
     color: '#2F6BFF',
     fontWeight: '700',
+  },
+
+  modalOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(23, 25, 35, 0.58)',
+    paddingHorizontal: 24,
+  },
+
+  modalCard: {
+    width: '100%',
+    maxWidth: 440,
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    padding: 24,
+    shadowColor: '#000000',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+  },
+
+  modalTitle: {
+    color: '#171923',
+    fontSize: 18,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+
+  modalMessage: {
+    color: '#596170',
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 22,
+  },
+
+  modalButton: {
+    alignSelf: 'flex-end',
+    minWidth: 104,
+    height: 42,
+    borderRadius: 10,
+    backgroundColor: '#2F6BFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+  },
+
+  modalButtonText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });
