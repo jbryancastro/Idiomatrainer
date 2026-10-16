@@ -9,6 +9,89 @@ export type Simulation = {
   scenario: string;
 };
 
+export type WeaknessExercise = {
+  id: string;
+  icon: string;
+  title: string;
+  subtitle: string;
+  greeting: string;
+  scenario: string;
+};
+
+export const createWeaknessExercise = (weakness: string, index: number): WeaknessExercise => {
+  const text = weakness.toLocaleLowerCase();
+
+  if (/breve|fragment|desarroll|fluidez|oraci.n completa|respuesta corta/.test(text)) {
+    return {
+      id: `weakness-${index}`,
+      icon: '💬',
+      title: weakness,
+      subtitle: 'Practica respuestas completas con más detalles',
+      greeting: 'What do you like to do in your free time, and what makes it special for you?',
+      scenario:
+        `A focused English practice for the student's weakness: "${weakness}". Encourage the student to answer in complete sentences and add a reason, example, or detail. Ask follow-up questions that help them expand their answer. Give one short, supportive suggestion when useful. Keep the conversation at the student's current level.`,
+    };
+  }
+
+  if (/pasad|past|preté|preter|verbo|gram.tic|grammar|rutina/.test(text)) {
+    return {
+      id: `weakness-${index}`,
+      icon: '📘',
+      title: weakness,
+      subtitle: 'Practica pasado y variedad gramatical',
+      greeting: 'What did you do yesterday, and what was the most interesting part of your day?',
+      scenario:
+        `A focused English practice for the student's weakness: "${weakness}". Ask questions that make the student describe past activities and routines using varied, accurate grammar. Give one brief, supportive correction when useful, then ask a follow-up question. Keep the conversation at the student's current level.`,
+    };
+  }
+
+  if (/repet|memor|vocab|palabra|expresi/.test(text)) {
+    return {
+      id: `weakness-${index}`,
+      icon: '🧩',
+      title: weakness,
+      subtitle: 'Amplía tu vocabulario y evita repetir frases',
+      greeting: 'Tell me about something you enjoy doing, and explain what makes it interesting for you.',
+      scenario:
+        `A focused English practice for the student's weakness: "${weakness}". Help the student express the same idea in different ways and use varied vocabulary. Ask natural follow-up questions and briefly suggest a more natural alternative when useful. Keep the conversation at the student's current level.`,
+    };
+  }
+
+  if (/pronunci|sonido|acento/.test(text)) {
+    return {
+      id: `weakness-${index}`,
+      icon: '🎤',
+      title: weakness,
+      subtitle: 'Practica claridad y pronunciación al hablar',
+      greeting: 'Tell me about a person, place, or activity that is important to you.',
+      scenario:
+        `A focused English speaking practice for the student's weakness: "${weakness}". Ask short questions that encourage clear, complete spoken answers. Do not claim to measure individual sounds from a transcript; coach the student to speak clearly and naturally. Keep the conversation at the student's current level.`,
+    };
+  }
+
+  if (/comprensi|entend|pregunta|responder|respuesta/.test(text)) {
+    return {
+      id: `weakness-${index}`,
+      icon: '👂',
+      title: weakness,
+      subtitle: 'Escucha la pregunta y responde con detalles',
+      greeting: 'Imagine you are planning a day off. What would you like to do, and why?',
+      scenario:
+        `A focused English practice for the student's weakness: "${weakness}". Ask one clear question at a time, check that the student answers it, and encourage a complete answer with a reason or example. Give brief, supportive guidance when useful. Keep the conversation at the student's current level.`,
+    };
+  }
+
+  return {
+    id: `weakness-${index}`,
+    icon: '🎯',
+    title: weakness,
+    subtitle: 'Práctica conversacional personalizada',
+    greeting: 'Let’s practice together. Can you tell me about something you did recently?',
+    scenario:
+      `A focused English practice for the student's weakness: "${weakness}". Ask one question at a time and give the student a chance to practice. Provide one brief, supportive suggestion when useful. Keep the conversation at the student's current level.`,
+  };
+};
+
 export const SIMULATIONS: Simulation[] = [
   {
     id: 'entrevista',

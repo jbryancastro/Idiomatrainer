@@ -15,6 +15,15 @@ export type SpeechAnalysis = {
   tip: string;
 };
 
+export type AssessmentInsights = {
+  ready: boolean;
+  fromLevel: SpeechAnalysis['level'];
+  targetLevel: SpeechAnalysis['level'];
+  weaknesses: string[];
+  evidence: string;
+  tip: string;
+};
+
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL?.replace(/\/$/, '');
 const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -39,6 +48,11 @@ const scoresKey = async () => {
   return `idiomatrainer.scores.${user?.id ?? 'guest'}`;
 };
 
+const insightsKey = async () => {
+  const user = await getSessionUser();
+  return `idiomatrainer.assessment-insights.${user?.id ?? 'guest'}`;
+};
+
 // Puntuaciones del último análisis hecho en este dispositivo; null si no hay.
 export const getSavedScores = async (): Promise<SpeechAnalysis['scores'] | null> => {
   try {
@@ -47,6 +61,42 @@ export const getSavedScores = async (): Promise<SpeechAnalysis['scores'] | null>
   } catch {
     return null;
   }
+};
+
+export const saveAssessmentScores = async (scores: SpeechAnalysis['scores']) => {
+  await AsyncStorage.setItem(await scoresKey(), JSON.stringify(scores));
+};
+
+export const getSavedAssessmentInsights = async (): Promise<AssessmentInsights | null> => {
+  const raw = await AsyncStorage.getItem(await insightsKey());
+  if (!raw) return null;
+  const value: unknown = JSON.parse(raw);
+  if (typeof value !== 'object' || value === null) return null;
+
+  const insights = value as Partial<AssessmentInsights>;
+  if (
+    typeof insights.ready !== 'boolean' ||
+    !isLevel(insights.fromLevel) ||
+    !isLevel(insights.targetLevel) ||
+    !Array.isArray(insights.weaknesses) ||
+    !insights.weaknesses.every((weakness) => typeof weakness === 'string') ||
+    typeof insights.evidence !== 'string' ||
+    typeof insights.tip !== 'string'
+  ) {
+    return null;
+  }
+  return insights as AssessmentInsights;
+};
+
+export const saveAssessmentInsights = async (insights: AssessmentInsights) => {
+  await AsyncStorage.setItem(await insightsKey(), JSON.stringify(insights));
+};
+
+export const saveAssessmentLevel = async (level: SpeechAnalysis['level']) => {
+  if (!(await saveAccountLevel(level))) {
+    throw new Error('No se pudo guardar el nivel en tu cuenta. Revisa tu conexión e inténtalo de nuevo.');
+  }
+  await AsyncStorage.setItem(await levelKey(), level);
 };
 
 const isLevel = (value: unknown): value is SpeechAnalysis['level'] =>

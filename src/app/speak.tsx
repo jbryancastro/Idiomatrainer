@@ -1,6 +1,18 @@
-import { fetchQuestionsUsed, MAX_QUESTIONS, QuestionLimitError, sendVoiceTurn, type ChatTurn } from '@/lib/speak-chat';
+import {
+  ASSESSMENT_TURNS,
+  sendVoiceTurn,
+  type ChatTurn,
+  type ConversationAssessment,
+} from '@/lib/speak-chat';
 import { findSimulation } from '@/lib/simulations';
-import { getSavedLevel } from '@/lib/speech-analysis';
+import {
+  getSavedLevel,
+  LEVEL_NAMES,
+  saveAssessmentInsights,
+  saveAssessmentLevel,
+  saveAssessmentScores,
+  type SpeechAnalysis,
+} from '@/lib/speech-analysis';
 import {
     AudioModule,
     RecordingPresets,
@@ -27,8 +39,17 @@ const TABS = [
   { id: 'perfil', icon: '👤', label: 'Perfil', route: '/account' },
 ] as const;
 
-const DEFAULT_GREETING = "Hi! I'm Alex, your English tutor. How are you today?";
 const MAX_RECORDING_MS = 30_000;
+const LEVELS: SpeechAnalysis['level'][] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+
+const OPENING_QUESTIONS: Record<SpeechAnalysis['level'], string> = {
+  A1: '',
+  A2: 'Tell me about your daily routine and something you did last weekend.',
+  B1: 'Describe an important experience you have had. What happened, and how did you feel?',
+  B2: 'Describe a challenge you faced and explain how you handled it.',
+  C1: 'Some people say technology makes life better but less personal. What is your view, and why?',
+  C2: 'What does it mean to communicate effectively across cultures? Discuss nuances and give an example.',
+};
 
 type Status = 'idle' | 'listening' | 'thinking' | 'speaking';
 
@@ -41,25 +62,82 @@ const STATUS_LABELS: Record<Status, string> = {
 
 export default function SpeakScreen() {
   const activeTab = 'hablar';
-  const { topic } = useLocalSearchParams<{ topic?: string }>();
+  const {
+    topic,
+    practice,
+    practiceTitle,
+    practiceSubtitle,
+    practiceGreeting,
+    practiceScenario,
+  } = useLocalSearchParams<{
+    topic?: string;
+    practice?: string;
+    practiceTitle?: string;
+    practiceSubtitle?: string;
+    practiceGreeting?: string;
+    practiceScenario?: string;
+  }>();
+  const practiceMode = practice === 'true';
   const simulation = findSimulation(topic);
-  const greeting = simulation?.greeting ?? DEFAULT_GREETING;
+  const exerciseGreeting = Array.isArray(practiceGreeting) ? practiceGreeting[0] : practiceGreeting;
+  const exerciseScenario = Array.isArray(practiceScenario) ? practiceScenario[0] : practiceScenario;
+  const exerciseTitle = Array.isArray(practiceTitle) ? practiceTitle[0] : practiceTitle;
+  const exerciseSubtitle = Array.isArray(practiceSubtitle) ? practiceSubtitle[0] : practiceSubtitle;
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const [messages, setMessages] = useState<ChatTurn[]>([{ role: 'ia', text: greeting }]);
+  const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState('');
   const scrollRef = useRef<ScrollView>(null);
   const statusRef = useRef<Status>('idle');
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const greetingSpokenRef = useRef(false);
 
-  const [level, setLevel] = useState<string | null>(null);
-  const [used, setUsed] = useState(0);
-  const limitReached = used >= MAX_QUESTIONS;
+  const [level, setLevel] = useState<SpeechAnalysis['level'] | null>(null);
+  const [levelLoaded, setLevelLoaded] = useState(false);
+  const [assessment, setAssessment] = useState<ConversationAssessment | null>(null);
+  const [assessmentTransition, setAssessmentTransition] = useState<{
+    from: SpeechAnalysis['level'];
+    to: SpeechAnalysis['level'];
+  } | null>(null);
+  const [savingLevel, setSavingLevel] = useState(false);
+  const [levelConfirmed, setLevelConfirmed] = useState(false);
+  const targetLevel = level ? LEVELS[LEVELS.indexOf(level) + 1] : undefined;
+  const answeredTurns = messages.filter((message) => message.role === 'user').length;
 
   useEffect(() => {
-    getSavedLevel().then(setLevel).catch(() => {});
-    fetchQuestionsUsed().then(setUsed).catch(() => {});
-  }, []);
+    let active = true;
+    getSavedLevel()
+      .then((saved) => {
+        if (!active) return;
+        setLevel(saved);
+        setLevelLoaded(true);
+        if (!saved) setError('Completa primero la evaluación inicial para conocer tu nivel.');
+        else if (saved !== 'C2') {
+          const nextLevel = LEVELS[LEVELS.indexOf(saved) + 1];
+          const opening = practiceMode
+            ? exerciseGreeting ?? 'Let’s practice together. Tell me about something you did recently.'
+            : simulation?.greeting ?? OPENING_QUESTIONS[nextLevel];
+          setMessages([{ role: 'ia', text: opening }]);
+        } else {
+          setMessages([
+            {
+              role: 'ia',
+              text: practiceMode
+                ? exerciseGreeting ?? 'Let’s practice together. What would you like to talk about?'
+                : 'You have reached C2. Keep practicing to maintain your English.',
+            },
+          ]);
+        }
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        setError(err instanceof Error ? err.message : 'No se pudo cargar tu nivel.');
+        setLevelLoaded(true);
+      });
+    return () => {
+      active = false;
+    };
+  }, [exerciseGreeting, practiceMode, simulation]);
 
   const updateStatus = (next: Status) => {
     statusRef.current = next;
@@ -83,14 +161,27 @@ export default function SpeakScreen() {
   };
 
   useEffect(() => {
-    speak(greeting);
-    return () => {
+    if (
+      !levelLoaded ||
+      !level ||
+      (!targetLevel && !practiceMode) ||
+      !messages.length ||
+      greetingSpokenRef.current
+    ) return;
+    greetingSpokenRef.current = true;
+    speak(messages[0].text);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levelLoaded, level, targetLevel, practiceMode, messages]);
+
+  useEffect(
+    () => () => {
       Speech.stop();
       if (autoStopRef.current) clearTimeout(autoStopRef.current);
       if (statusRef.current === 'listening') recorder.stop().catch(() => {});
-    };
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    []
+  );
 
   useEffect(() => {
     scrollRef.current?.scrollToEnd({ animated: true });
@@ -127,20 +218,53 @@ export default function SpeakScreen() {
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false });
       if (!recorder.uri) throw new Error('No se pudo guardar la grabación.');
 
-      const { userText, reply, used: serverUsed } = await sendVoiceTurn(
+      const isFinalTurn = !practiceMode && answeredTurns === ASSESSMENT_TURNS - 1;
+      if (!level || (!targetLevel && !practiceMode)) {
+        throw new Error('No se pudo determinar tu nivel actual.');
+      }
+      const { userText, reply, assessment: finalAssessment } = await sendVoiceTurn(
         recorder.uri,
         messages,
-        simulation?.scenario
+        level,
+        practiceMode ? exerciseScenario : simulation?.scenario,
+        practiceMode ? 'practice' : 'assessment'
       );
+      if (isFinalTurn && !finalAssessment) {
+        throw new Error('La IA no completó la evaluación. Inténtalo de nuevo.');
+      }
+      let assessmentTarget: SpeechAnalysis['level'] | undefined;
+      if (finalAssessment) {
+        if (practiceMode || !targetLevel) {
+          throw new Error('La IA devolvió una evaluación en un ejercicio de práctica.');
+        }
+        assessmentTarget = targetLevel;
+      }
       setMessages((current) => [
         ...current,
         { role: 'user', text: userText },
         { role: 'ia', text: reply },
       ]);
       speak(reply);
-      setUsed(serverUsed);
+      if (finalAssessment) {
+        if (!assessmentTarget) throw new Error('No se pudo determinar el nivel objetivo.');
+        setAssessment(finalAssessment);
+        setAssessmentTransition({ from: level, to: assessmentTarget });
+        Promise.all([
+          saveAssessmentScores(finalAssessment.scores),
+          saveAssessmentInsights({
+            ...finalAssessment,
+            fromLevel: level,
+            targetLevel: assessmentTarget,
+          }),
+        ]).catch((saveError: unknown) => {
+          setError(
+            saveError instanceof Error
+              ? `La evaluación terminó, pero no se pudieron guardar los resultados: ${saveError.message}`
+              : 'La evaluación terminó, pero no se pudieron guardar los resultados.'
+          );
+        });
+      }
     } catch (err) {
-      if (err instanceof QuestionLimitError) setUsed(MAX_QUESTIONS);
       setError(err instanceof Error ? err.message : 'No se pudo obtener la respuesta.');
       updateStatus('idle');
     }
@@ -148,17 +272,31 @@ export default function SpeakScreen() {
 
   const handleMicPress = () => {
     if (status === 'thinking') return;
-    if (limitReached && status !== 'listening') {
-      Speech.stop();
-      updateStatus('idle');
-      setError(`Usaste tus ${MAX_QUESTIONS} preguntas de esta práctica, mejora el plan.`);
+    if (status === 'listening') {
+      finishListening();
       return;
     }
-    if (status === 'listening') finishListening();
-    else startListening();
+    if (!level || (!targetLevel && !practiceMode) || assessment) return;
+    startListening();
   };
 
   const listening = status === 'listening';
+  const loading = !levelLoaded;
+
+  const confirmLevel = async () => {
+    if (!assessment?.ready || !targetLevel) return;
+    setSavingLevel(true);
+    setError('');
+    try {
+      await saveAssessmentLevel(targetLevel);
+      setLevel(targetLevel);
+      setLevelConfirmed(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo guardar el nuevo nivel.');
+    } finally {
+      setSavingLevel(false);
+    }
+  };
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -168,40 +306,80 @@ export default function SpeakScreen() {
           <Text style={styles.headerIcon}>←</Text>
         </TouchableOpacity>
         <View style={styles.headerTitleRow}>
-          <Text style={styles.headerTitle}>{simulation?.title ?? 'Conversación con IA'}</Text>
+          <Text style={styles.headerTitle}>
+            {practiceMode ? exerciseTitle ?? 'Práctica personalizada' : simulation?.title ?? 'Evaluación de nivel'}
+          </Text>
           <View style={styles.iaBadge}>
             <Text style={styles.iaBadgeText}>IA</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.headerButton}>
+        <TouchableOpacity style={styles.headerButton} onPress={() => router.push('/progress')}>
           <Text style={styles.headerIcon}>⚙️</Text>
         </TouchableOpacity>
       </View>
 
-      {/* USAGE */}
+      {/* ASSESSMENT PROGRESS */}
       <View style={styles.usageCard}>
         <View style={styles.usageHeader}>
           <View>
-            <Text style={styles.usageTitle}>Práctica de conversación</Text>
+            <Text style={styles.usageTitle}>
+              {practiceMode ? 'Práctica personalizada' : 'Evaluación conversacional'}
+            </Text>
             <Text style={styles.usageSubtitle}>
-              Tema: {simulation?.title ?? 'situaciones cotidianas'}
-              {level ? ` · Nivel ${level}` : ''}
+              {loading
+                ? 'Cargando tu nivel…'
+                : practiceMode
+                  ? exerciseSubtitle ?? 'Practica la debilidad detectada por la IA'
+                  : level && targetLevel
+                  ? `Objetivo: ${level} → ${targetLevel}`
+                  : level === 'C2'
+                    ? 'Ya alcanzaste el nivel C2'
+                    : 'Evaluación inicial requerida'}
             </Text>
           </View>
-          <Text style={styles.usageIcon}>💬</Text>
+          <Text style={styles.usageIcon}>{practiceMode ? '🧩' : '🎯'}</Text>
         </View>
-        <View style={styles.usageRow}>
-          <Text style={styles.usageLabel}>Preguntas utilizadas</Text>
-          <Text style={styles.usageCount}>
-            {Math.min(used, MAX_QUESTIONS)} de {MAX_QUESTIONS}
+        {practiceMode ? (
+          <Text style={styles.practiceHint}>
+            {exerciseTitle
+              ? `Ejercicio enfocado en: ${exerciseTitle}`
+              : 'Conversación abierta: practica a tu ritmo.'}
+          </Text>
+        ) : (
+          <>
+            <View style={styles.usageRow}>
+              <Text style={styles.usageLabel}>Respuestas completadas</Text>
+              <Text style={styles.usageCount}>
+                {Math.min(answeredTurns, ASSESSMENT_TURNS)} de {ASSESSMENT_TURNS}
+              </Text>
+            </View>
+            <View style={styles.segments}>
+              {Array.from({ length: ASSESSMENT_TURNS }, (_, i) => (
+                <View key={i} style={[styles.segment, i < answeredTurns && styles.segmentFilled]} />
+              ))}
+            </View>
+          </>
+        )}
+      </View>
+
+      {!loading && !level && (
+        <View style={styles.noticeCard}>
+          <Text style={styles.noticeText}>
+            Necesitamos una evaluación inicial para establecer tu nivel antes de medir tu avance.
+          </Text>
+          <TouchableOpacity style={styles.noticeButton} onPress={() => router.push('/evaluating')}>
+            <Text style={styles.noticeButtonText}>HACER EVALUACIÓN INICIAL</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {!loading && level === 'C2' && (
+        <View style={styles.noticeCard}>
+          <Text style={styles.noticeText}>
+            C2 es el nivel más alto del MCER. Puedes seguir practicando para mantener tu dominio.
           </Text>
         </View>
-        <View style={styles.segments}>
-          {Array.from({ length: MAX_QUESTIONS }, (_, i) => (
-            <View key={i} style={[styles.segment, i < used && styles.segmentFilled]} />
-          ))}
-        </View>
-      </View>
+      )}
 
       {/* CHAT */}
       <ScrollView
@@ -228,6 +406,62 @@ export default function SpeakScreen() {
           )
         )}
 
+        {assessment && assessmentTransition && (
+          <View style={styles.assessmentCard}>
+            <Text style={styles.assessmentTitle}>
+              {assessment.ready ? '¡Estás preparado para avanzar!' : 'Sigue fortaleciendo tu inglés'}
+            </Text>
+            <Text style={styles.assessmentLevel}>
+              Evaluación {assessmentTransition.from} → {assessmentTransition.to}
+            </Text>
+            <Text style={styles.assessmentSectionTitle}>Puntuaciones</Text>
+            {([
+              ['Conversación', assessment.scores.conversation],
+              ['Pronunciación', assessment.scores.pronunciation],
+              ['Gramática', assessment.scores.grammar],
+              ['Comprensión', assessment.scores.comprehension],
+              ['Respuesta', assessment.scores.response],
+            ] as const).map(([label, score]) => (
+              <View key={label} style={styles.assessmentScoreRow}>
+                <Text style={styles.assessmentScoreLabel}>{label}</Text>
+                <Text style={styles.assessmentScoreValue}>{score}/100</Text>
+              </View>
+            ))}
+            <Text style={styles.assessmentSectionTitle}>Lo que observó la IA</Text>
+            <Text style={styles.assessmentBody}>{assessment.evidence}</Text>
+            {assessment.weaknesses.length > 0 && (
+              <>
+                <Text style={styles.assessmentSectionTitle}>Aspectos por mejorar</Text>
+                {assessment.weaknesses.map((weakness, index) => (
+                  <Text key={`${index}-${weakness}`} style={styles.assessmentBody}>
+                    • {weakness}
+                  </Text>
+                ))}
+              </>
+            )}
+            <Text style={styles.assessmentTip}>{assessment.tip}</Text>
+            <Text style={styles.assessmentDisclaimer}>
+              Resultado orientativo; no sustituye una certificación oficial del MCER.
+            </Text>
+            {assessment.ready &&
+              (levelConfirmed ? (
+                <Text style={styles.confirmedText}>
+                  Tu nivel ahora es {assessmentTransition.to} · {LEVEL_NAMES[assessmentTransition.to]}
+                </Text>
+              ) : (
+                <TouchableOpacity
+                  style={styles.noticeButton}
+                  disabled={savingLevel}
+                  onPress={confirmLevel}
+                >
+                  <Text style={styles.noticeButtonText}>
+                    {savingLevel ? 'GUARDANDO…' : `ACTUALIZAR MI NIVEL A ${assessmentTransition.to}`}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+          </View>
+        )}
+
         {/* TYPING */}
         {status === 'thinking' && (
           <View style={styles.typingBubble}>
@@ -240,24 +474,38 @@ export default function SpeakScreen() {
 
       {/* MIC */}
       <View style={styles.micArea}>
-        {error && limitReached ? (
-          <TouchableOpacity onPress={() => router.push('/plans')}>
-            <Text style={[styles.errorText, styles.upgradeLink]}>{error}</Text>
-          </TouchableOpacity>
-        ) : error ? (
+        {error ? (
           <Text style={styles.errorText}>{error}</Text>
         ) : null}
         <TouchableOpacity
           style={[styles.micOuter, listening && styles.micOuterActive]}
           activeOpacity={0.8}
           onPress={handleMicPress}
-          disabled={status === 'thinking'}
+          disabled={
+            status === 'thinking' ||
+            loading ||
+            !level ||
+            (!targetLevel && !practiceMode) ||
+            Boolean(assessment)
+          }
         >
           <View style={[styles.micInner, listening && styles.micInnerActive]}>
             <Text style={styles.micIcon}>{listening ? '⏹️' : '🎙️'}</Text>
           </View>
         </TouchableOpacity>
-        <Text style={styles.micLabel}>{STATUS_LABELS[status]}</Text>
+        <Text style={styles.micLabel}>
+          {loading
+            ? 'Cargando evaluación…'
+            : !level
+              ? 'Completa primero la evaluación inicial'
+              : !targetLevel && !practiceMode
+                ? 'Nivel máximo alcanzado'
+                : assessment
+                  ? 'Evaluación completada'
+                  : status === 'idle'
+                    ? 'Toca para responder en inglés'
+                    : STATUS_LABELS[status]}
+        </Text>
       </View>
 
       {/* TAB BAR */}
@@ -361,6 +609,41 @@ const styles = StyleSheet.create({
   segments: { flexDirection: 'row', gap: 6 },
   segment: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#E5E7EB' },
   segmentFilled: { backgroundColor: '#2F6BFF' },
+  practiceHint: {
+    marginTop: 12,
+    fontSize: 12,
+    lineHeight: 17,
+    color: '#5B6472',
+  },
+
+  noticeCard: {
+    marginHorizontal: 20,
+    marginBottom: 8,
+    padding: 14,
+    borderRadius: 14,
+    backgroundColor: '#F3F6FF',
+    gap: 10,
+  },
+  noticeText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#3F4B63',
+  },
+  noticeButton: {
+    minHeight: 42,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    backgroundColor: '#2F6BFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+  },
+  noticeButtonText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
 
   chat: {
     paddingHorizontal: 16,
@@ -421,6 +704,70 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
   },
 
+  assessmentCard: {
+    padding: 16,
+    borderRadius: 16,
+    backgroundColor: '#F4F7FF',
+    gap: 8,
+  },
+  assessmentTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#171923',
+  },
+  assessmentLevel: {
+    marginBottom: 4,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#2F6BFF',
+  },
+  assessmentSectionTitle: {
+    marginTop: 8,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#171923',
+  },
+  assessmentScoreRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E1E7F5',
+  },
+  assessmentScoreLabel: {
+    fontSize: 13,
+    color: '#3F4B63',
+  },
+  assessmentScoreValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#171923',
+  },
+  assessmentBody: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#3F4B63',
+  },
+  assessmentTip: {
+    marginTop: 6,
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: '700',
+    color: '#2F6BFF',
+  },
+  assessmentDisclaimer: {
+    marginTop: 4,
+    fontSize: 11,
+    lineHeight: 16,
+    color: '#6B7280',
+  },
+  confirmedText: {
+    marginTop: 10,
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#16834A',
+  },
+
   typingBubble: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -471,10 +818,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#E5484D',
   },
 
-  upgradeLink: {
-    textDecorationLine: 'underline',
-    fontWeight: '700',
-  },
   errorText: {
     marginBottom: 10,
     paddingHorizontal: 24,

@@ -159,8 +159,9 @@ export const fetchAccountLevel = async (): Promise<string | null | undefined> =>
   return user ? (user.user_metadata?.level ?? null) : undefined;
 };
 
-export const saveAccountLevel = async (level: string) => {
-  await userRequest('PUT', { data: { level } });
+export const saveAccountLevel = async (level: string): Promise<boolean> => {
+  const user = await userRequest('PUT', { data: { level } });
+  return user !== null;
 };
 
 export const signInWithEmail = async (email: string, password: string) => {

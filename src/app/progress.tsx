@@ -1,7 +1,9 @@
 import {
+  getSavedAssessmentInsights,
   getSavedLevel,
   getSavedScores,
   LEVEL_NAMES,
+  type AssessmentInsights,
   type SpeechAnalysis,
 } from '@/lib/speech-analysis';
 import { router, useFocusEffect } from 'expo-router';
@@ -25,8 +27,9 @@ const LEVELS: Level[] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
 const SKILLS: { key: keyof Scores; icon: string; label: string; focus: string }[] = [
   { key: 'conversation', icon: '💬', label: 'Fluidez', focus: 'tu fluidez' },
   { key: 'comprehension', icon: '👂', label: 'Comprensión', focus: 'tu comprensión' },
-  { key: 'response', icon: '🗨️', label: 'Vocabulario', focus: 'tu vocabulario' },
+  { key: 'response', icon: '🗨️', label: 'Respuesta', focus: 'la naturalidad de tus respuestas' },
   { key: 'pronunciation', icon: '🎤', label: 'Pronunciación', focus: 'tu pronunciación' },
+  { key: 'grammar', icon: '📚', label: 'Gramática', focus: 'tu gramática' },
 ];
 
 const average = (scores: Scores) => {
@@ -40,14 +43,33 @@ export default function ProgressScreen() {
   const wide = width >= 900;
   const [level, setLevel] = useState<Level | null>(null);
   const [scores, setScores] = useState<Scores | null>(null);
+  const [insights, setInsights] = useState<AssessmentInsights | null>(null);
+  const [loadError, setLoadError] = useState('');
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
       getSavedLevel()
         .then((saved) => active && setLevel(saved))
-        .catch(() => {});
-      getSavedScores().then((saved) => active && setScores(saved));
+        .catch((error: unknown) => {
+          if (active) {
+            setLoadError(error instanceof Error ? error.message : 'No se pudo cargar tu nivel.');
+          }
+        });
+      getSavedScores()
+        .then((saved) => active && setScores(saved))
+        .catch((error: unknown) => {
+          if (active) {
+            setLoadError(error instanceof Error ? error.message : 'No se pudieron cargar tus puntuaciones.');
+          }
+        });
+      getSavedAssessmentInsights()
+        .then((saved) => active && setInsights(saved))
+        .catch((error: unknown) => {
+          if (active) {
+            setLoadError(error instanceof Error ? error.message : 'No se pudieron cargar las recomendaciones.');
+          }
+        });
       return () => {
         active = false;
       };
@@ -110,7 +132,9 @@ export default function ProgressScreen() {
             <Text style={styles.progressPercent}>{progress}%</Text>
             <Text style={styles.progressHint}>
               {next
-                ? `Necesitas completar las evaluaciones de las habilidades clave para desbloquear ${next}.`
+                ? scores
+                  ? 'Promedio de las cinco habilidades evaluadas por la IA.'
+                  : `Completa una evaluación para medir tu avance hacia ${next}.`
                 : 'Mantén tus habilidades practicando con la IA.'}
             </Text>
           </View>
@@ -120,6 +144,20 @@ export default function ProgressScreen() {
           <View style={[styles.goalCard, wide && styles.colWide]}>
             <Text style={styles.goalTitle}>🎯  Siguiente objetivo</Text>
             <Text style={styles.goalText}>{goalText}</Text>
+            {next && insights && (
+              <View style={styles.recommendations}>
+                <Text style={styles.recommendationsTitle}>
+                  Recomendaciones de la IA ({insights.fromLevel} → {insights.targetLevel})
+                </Text>
+                {insights.weaknesses.map((weakness, index) => (
+                  <Text key={`${index}-${weakness}`} style={styles.recommendationText}>
+                    • {weakness}
+                  </Text>
+                ))}
+                <Text style={styles.recommendationEvidence}>{insights.evidence}</Text>
+                <Text style={styles.recommendationTip}>{insights.tip}</Text>
+              </View>
+            )}
             <TouchableOpacity onPress={() => router.push(level ? '/practice' : '/evaluating')}>
               <Text style={styles.goalLink}>
                 {level ? 'Ver recomendaciones →' : 'Hacer evaluación →'}
@@ -128,11 +166,13 @@ export default function ProgressScreen() {
           </View>
         </View>
 
+        {loadError ? <Text style={styles.loadError}>{loadError}</Text> : null}
+
         {/* SKILLS */}
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>📶  Tus habilidades</Text>
           <Text style={styles.sectionSubtitle}>
-            Cada habilidad se evalúa en base a tus conversaciones con la IA.
+            Porcentajes de la última evaluación conversacional de la IA.
           </Text>
 
           <View style={[styles.skillsWrap, wide && styles.skillsWrapWide]}>
@@ -261,6 +301,12 @@ const styles = StyleSheet.create({
   goalTitle: { fontSize: 13, fontWeight: '800', color: '#2F6BFF' },
   goalText: { fontSize: 12, color: '#2B3558', lineHeight: 17 },
   goalLink: { fontSize: 12, fontWeight: '800', color: '#2F6BFF', marginTop: 4 },
+  recommendations: { gap: 5, marginTop: 4 },
+  recommendationsTitle: { fontSize: 12, fontWeight: '800', color: '#2F6BFF' },
+  recommendationText: { fontSize: 12, color: '#2B3558', lineHeight: 17 },
+  recommendationEvidence: { fontSize: 11, color: '#5B6788', lineHeight: 16, marginTop: 2 },
+  recommendationTip: { fontSize: 12, fontWeight: '700', color: '#2B3558', lineHeight: 17 },
+  loadError: { fontSize: 12, color: '#D64545' },
 
   sectionTitle: { fontSize: 18, fontWeight: '800', color: '#0F1B4C' },
   sectionSubtitle: { fontSize: 12, color: '#5B6788', marginTop: 4, marginBottom: 12 },

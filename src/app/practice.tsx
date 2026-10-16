@@ -1,5 +1,7 @@
-import { router } from 'expo-router';
-import { getDailySimulations } from '@/lib/simulations';
+import { getSavedAssessmentInsights } from '@/lib/speech-analysis';
+import { router, useFocusEffect } from 'expo-router';
+import { createWeaknessExercise, getDailySimulations, type WeaknessExercise } from '@/lib/simulations';
+import { useCallback, useState } from 'react';
 import {
     ScrollView,
     StyleSheet,
@@ -16,12 +18,6 @@ const TABS = [
   { id: 'progreso', icon: '📊', label: 'Progress', route: '/progress' },
   { id: 'perfil', icon: '👤', label: 'Perfil', route: '/account' },
 ] as const;
-
-const WEAKNESSES = [
-  { id: 'rapido', icon: '🎯', title: 'Responder rápidamente', subtitle: '11 ejercicios' },
-  { id: 'pasado', icon: '📘', title: 'Pasado simple', subtitle: '8 ejercicios' },
-  { id: 'preposiciones', icon: '🧩', title: 'Preposiciones', subtitle: '6 ejercicios' },
-];
 
 type Item = { id: string; icon: string; title: string; subtitle: string };
 
@@ -42,6 +38,39 @@ function ItemCard({ item, onPress }: { item: Item; onPress?: () => void }) {
 
 export default function PracticeScreen() {
   const activeTab = 'entrenar';
+  const [weaknessExercises, setWeaknessExercises] = useState<WeaknessExercise[]>([]);
+  const [weaknessesLoaded, setWeaknessesLoaded] = useState(false);
+  const [loadError, setLoadError] = useState('');
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      getSavedAssessmentInsights()
+        .then((insights) => {
+          if (!active) return;
+          setLoadError('');
+          setWeaknessExercises(
+            insights?.weaknesses.map((weakness, index) =>
+              createWeaknessExercise(weakness, index)
+            ) ?? []
+          );
+        })
+        .catch((error: unknown) => {
+          if (!active) return;
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : 'No se pudieron cargar las debilidades de tu evaluación.'
+          );
+        })
+        .finally(() => {
+          if (active) setWeaknessesLoaded(true);
+        });
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -57,11 +86,46 @@ export default function PracticeScreen() {
 
         {/* WEAKNESSES */}
         <Text style={styles.sectionTitle}>Entrena tus debilidades</Text>
-        <View style={styles.list}>
-          {WEAKNESSES.map((item) => (
-            <ItemCard key={item.id} item={item} />
-          ))}
-        </View>
+        {loadError ? <Text style={styles.emptyText}>{loadError}</Text> : null}
+        {!weaknessesLoaded ? (
+          <Text style={styles.emptyText}>Cargando las recomendaciones de tu evaluación…</Text>
+        ) : weaknessExercises.length > 0 ? (
+          <View style={styles.list}>
+            {weaknessExercises.map((exercise) => (
+              <ItemCard
+                key={exercise.id}
+                item={{
+                  id: exercise.id,
+                  icon: exercise.icon,
+                  title: exercise.title,
+                  subtitle: exercise.subtitle,
+                }}
+                onPress={() =>
+                  router.push({
+                    pathname: '/speak',
+                    params: {
+                      practice: 'true',
+                      practiceTitle: exercise.title,
+                      practiceSubtitle: exercise.subtitle,
+                      practiceGreeting: exercise.greeting,
+                      practiceScenario: exercise.scenario,
+                    },
+                  })
+                }
+              />
+            ))}
+          </View>
+        ) : (
+          <View style={styles.emptyCard}>
+            <Text style={styles.emptyText}>
+              Cuando completes una evaluación conversacional, aquí aparecerán ejercicios creados
+              para tus debilidades.
+            </Text>
+            <TouchableOpacity onPress={() => router.push('/speak')}>
+              <Text style={styles.emptyLink}>Hacer evaluación conversacional →</Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* SIMULATIONS */}
         <Text style={[styles.sectionTitle, styles.sectionSpacing]}>Simulaciones</Text>
@@ -142,6 +206,25 @@ const styles = StyleSheet.create({
 
   sectionSpacing: {
     marginTop: 24,
+  },
+
+  emptyCard: {
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E4E6EB',
+    backgroundColor: '#F7F9FF',
+    gap: 8,
+  },
+  emptyText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#5B6472',
+  },
+  emptyLink: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#2F6BFF',
   },
 
   list: {
