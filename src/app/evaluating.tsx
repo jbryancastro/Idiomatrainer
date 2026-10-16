@@ -1,7 +1,15 @@
-import { router } from 'expo-router';
-import { useEffect, useState } from 'react';
 import {
+    AudioModule,
+    RecordingPresets,
+    setAudioModeAsync,
+    useAudioRecorder,
+} from 'expo-audio';
+import { router } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
+import {
+    Alert,
     Image,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -15,10 +23,56 @@ const TOTAL_SECONDS = 60;
 const WAVEFORM_BARS = [4, 10, 6, 16, 22, 12, 18, 8, 20, 10, 14, 6, 18, 10, 4, 8, 14, 6, 10, 4];
 
 export default function EvaluatingScreen() {
-  // Cronómetro de la prueba de nivel: avanza mientras el usuario está "grabando".
-  const [seconds, setSeconds] = useState(32);
-  const [isRecording, setIsRecording] = useState(true);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const [seconds, setSeconds] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const isRecordingRef = useRef(false);
 
+  const startRecording = async () => {
+    try {
+      const permission = await AudioModule.requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        const message = 'Permite el acceso al micrófono para evaluar tu nivel.';
+        if (Platform.OS === 'web') window.alert(message);
+        else Alert.alert('Micrófono sin permiso', message);
+        return;
+      }
+
+      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
+      isRecordingRef.current = true;
+      setSeconds(0);
+      setIsRecording(true);
+    } catch {
+      Alert.alert('No se pudo grabar', 'Inténtalo nuevamente.');
+    }
+  };
+
+  const stopRecording = async () => {
+    if (!isRecordingRef.current) return;
+    isRecordingRef.current = false;
+    setIsRecording(false);
+    try {
+      await recorder.stop();
+      await setAudioModeAsync({ allowsRecording: false });
+    } catch {
+      // La grabación ya estaba detenida.
+    }
+  };
+
+  // Al salir de la pantalla se detiene cualquier grabación activa.
+  useEffect(() => {
+    return () => {
+      if (isRecordingRef.current) {
+        isRecordingRef.current = false;
+        recorder.stop().catch(() => {});
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cronómetro: cuenta mientras se graba y detiene la grabación al llegar a 60 s.
   useEffect(() => {
     if (!isRecording) return;
     const interval = setInterval(() => {
@@ -26,6 +80,25 @@ export default function EvaluatingScreen() {
     }, 1000);
     return () => clearInterval(interval);
   }, [isRecording]);
+
+  useEffect(() => {
+    if (isRecording && seconds >= TOTAL_SECONDS) {
+      stopRecording();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seconds, isRecording]);
+
+  const handleMicPress = () => {
+    if (isRecording) stopRecording();
+    else startRecording();
+  };
+
+  const handleFinish = async () => {
+    await stopRecording();
+    router.push(recorder.uri ? { pathname: '/perfil', params: { uri: recorder.uri } } : '/perfil');
+  };
+
+  const activeBars = Math.round((seconds / TOTAL_SECONDS) * WAVEFORM_BARS.length);
 
   const formatTime = (value: number) => {
     const mins = Math.floor(value / 60).toString().padStart(2, '0');
@@ -74,7 +147,7 @@ export default function EvaluatingScreen() {
             <View style={styles.micRingInner}>
               <TouchableOpacity
                 style={styles.micButton}
-                onPress={() => setIsRecording((prev) => !prev)}
+                onPress={handleMicPress}
               >
                 <Image
                   source={require('../../img/microfono.png')}
@@ -94,7 +167,7 @@ export default function EvaluatingScreen() {
               style={[
                 styles.waveformBar,
                 { height },
-                index < 10 ? styles.waveformBarActive : styles.waveformBarInactive,
+                index < activeBars ? styles.waveformBarActive : styles.waveformBarInactive,
               ]}
             />
           ))}
@@ -109,7 +182,7 @@ export default function EvaluatingScreen() {
         {/* FINISH BUTTON */}
         <TouchableOpacity
           style={styles.finishButton}
-          onPress={() => router.push('/perfil')}
+          onPress={handleFinish}
         >
           <Text style={styles.finishButtonText}>TERMINAR</Text>
         </TouchableOpacity>

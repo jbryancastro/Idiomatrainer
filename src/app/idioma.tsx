@@ -21,7 +21,7 @@ const LANGUAGES: { id: string; flag: FlagCode; label: string; recommended: boole
 
 export default function LanguageScreen() {
   // Idioma seleccionado por el usuario para su entrenamiento; Inglés viene preseleccionado.
-  const [selected, setSelected] = useState('ingles');
+  const [selected, setSelected] = useState<string | null>(null);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -79,7 +79,8 @@ export default function LanguageScreen() {
 
         {/* CONTINUE BUTTON */}
         <TouchableOpacity
-          style={styles.continueButton}
+          style={[styles.continueButton, !selected && styles.continueButtonDisabled]}
+          disabled={!selected}
           onPress={() => router.push('/level')}
         >
           <Text style={styles.continueButtonText}>CONTINUAR</Text>
@@ -225,6 +226,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#2F6BFF',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+
+  continueButtonDisabled: {
+    backgroundColor: '#B8C4E0',
   },
 
   continueButtonText: {

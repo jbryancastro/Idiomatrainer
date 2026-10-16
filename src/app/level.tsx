@@ -68,7 +68,8 @@ export default function LevelScreen() {
 
         {/* CONTINUE BUTTON */}
         <TouchableOpacity
-          style={styles.continueButton}
+          style={[styles.continueButton, !selected && styles.continueButtonDisabled]}
+          disabled={!selected}
           onPress={() => router.push('/evaluating')}
         >
           <Text style={styles.continueButtonText}>HACER PRUEBA DE NIVEL</Text>
@@ -193,6 +194,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#2F6BFF',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+
+  continueButtonDisabled: {
+    backgroundColor: '#B8C4E0',
   },
 
   continueButtonText: {

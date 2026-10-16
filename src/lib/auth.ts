@@ -1,9 +1,14 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 type AuthResponse = {
   access_token?: string;
+  refresh_token?: string;
+  expires_in?: number;
   user?: {
     id: string;
     email?: string;
     identities?: Array<unknown>;
+    user_metadata?: { full_name?: string; name?: string; level?: string };
   };
   msg?: string;
   error_description?: string;
@@ -74,14 +79,129 @@ export const signUpWithEmail = async (email: string, password: string, name: str
     throw new AuthRequestError('Este correo ya está registrado.', 422);
   }
 
+  // Si el registro inicia sesión de inmediato, se guarda el nombre escrito.
+  if (result.access_token && result.user) {
+    await saveSessionUser({
+      id: result.user.id,
+      email: result.user.email ?? email.trim().toLowerCase(),
+      name: name.trim() || result.user.email?.split('@')[0] || '',
+      ...tokensFrom(result),
+    });
+  }
+
   return result;
 };
 
-export const signInWithEmail = (email: string, password: string) =>
-  requestAuth('token?grant_type=password', {
+export type SessionUser = {
+  id: string;
+  email: string;
+  name: string;
+  accessToken?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+};
+
+const SESSION_KEY = 'idiomatrainer.session-user';
+
+const tokensFrom = (result: AuthResponse) => ({
+  accessToken: result.access_token,
+  refreshToken: result.refresh_token,
+  expiresAt: Date.now() + (result.expires_in ?? 3600) * 1000,
+});
+
+const saveSessionUser = (user: SessionUser) =>
+  AsyncStorage.setItem(SESSION_KEY, JSON.stringify(user));
+
+export const getSessionUser = async (): Promise<SessionUser | null> => {
+  const raw = await AsyncStorage.getItem(SESSION_KEY);
+  return raw ? (JSON.parse(raw) as SessionUser) : null;
+};
+
+export const clearSessionUser = () => AsyncStorage.removeItem(SESSION_KEY);
+
+// Devuelve un token vigente, renovándolo con el refresh token si ya venció.
+export const getAccessToken = async (): Promise<string | null> => {
+  const user = await getSessionUser();
+  if (!user?.accessToken) return null;
+  if ((user.expiresAt ?? 0) - 60_000 > Date.now()) return user.accessToken;
+  if (!user.refreshToken) return null;
+
+  try {
+    const result = await requestAuth('token?grant_type=refresh_token', {
+      refresh_token: user.refreshToken,
+    });
+    await saveSessionUser({ ...user, ...tokensFrom(result) });
+    return result.access_token ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const userRequest = async (method: 'GET' | 'PUT', body?: Record<string, unknown>) => {
+  const token = await getAccessToken();
+  if (!supabaseUrl || !supabaseAnonKey || !token) return null;
+
+  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    method,
+    headers: {
+      apikey: supabaseAnonKey,
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return response.ok ? ((await response.json()) as NonNullable<AuthResponse['user']>) : null;
+};
+
+// Lee el nivel guardado en la cuenta (user_metadata). null si no hay sesión o falla.
+export const fetchAccountLevel = async (): Promise<string | null | undefined> => {
+  const user = await userRequest('GET');
+  return user ? (user.user_metadata?.level ?? null) : undefined;
+};
+
+export const saveAccountLevel = async (level: string) => {
+  await userRequest('PUT', { data: { level } });
+};
+
+export const signInWithEmail = async (email: string, password: string) => {
+  const result = await requestAuth('token?grant_type=password', {
     email: email.trim().toLowerCase(),
     password,
   });
+
+  if (result.user) {
+    const userEmail = result.user.email ?? email.trim().toLowerCase();
+    const metadata = result.user.user_metadata;
+    await saveSessionUser({
+      id: result.user.id,
+      email: userEmail,
+      name: metadata?.full_name ?? metadata?.name ?? userEmail.split('@')[0],
+      ...tokensFrom(result),
+    });
+  }
+
+  return result;
+};
+
+// Devuelve si el correo tiene cuenta; undefined si no se pudo comprobar.
+export const emailHasAccount = async (email: string): Promise<boolean | undefined> => {
+  if (!supabaseUrl || !supabaseAnonKey) return undefined;
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/check-email`, {
+      method: 'POST',
+      headers: {
+        apikey: supabaseAnonKey,
+        Authorization: `Bearer ${supabaseAnonKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ email: email.trim().toLowerCase() }),
+    });
+    if (!response.ok) return undefined;
+    return Boolean((await response.json()).exists);
+  } catch {
+    return undefined;
+  }
+};
 
 export const sendPasswordReset = (email: string) =>
   requestAuth('otp', {

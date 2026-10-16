@@ -1,4 +1,4 @@
-import { sendPasswordReset, signInWithEmail } from '@/lib/auth';
+import { emailHasAccount, sendPasswordReset, signInWithEmail } from '@/lib/auth';
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
@@ -42,12 +42,21 @@ export default function LoginScreen() {
 
     try {
       await signInWithEmail(email, password);
-      router.replace('/explore');
+      router.replace('/home');
     } catch (error) {
-      Alert.alert(
-        'No se pudo iniciar sesión',
-        error instanceof Error ? error.message : 'Revisa tu correo y contraseña.'
-      );
+      const message = error instanceof Error ? error.message : '';
+      if (/invalid login credentials/i.test(message)) {
+        const hasAccount = await emailHasAccount(email);
+        if (hasAccount === false) {
+          Alert.alert('Cuenta no encontrada', 'No existe una cuenta con ese correo. Crea una cuenta para continuar.');
+        } else if (hasAccount === true) {
+          Alert.alert('Contraseña incorrecta', 'La contraseña no coincide con ese correo. Inténtalo de nuevo.');
+        } else {
+          Alert.alert('No se pudo iniciar sesión', 'Correo o contraseña incorrectos.');
+        }
+        return;
+      }
+      Alert.alert('No se pudo iniciar sesión', message || 'Revisa tu correo y contraseña.');
     }
   };
 

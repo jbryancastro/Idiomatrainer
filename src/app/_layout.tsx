@@ -14,7 +14,6 @@ export default function RootLayout() {
       {/* Stack root: todas las pantallas son planas, sin barra de tabs */}
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="index" />
-        <Stack.Screen name="explore" />
         <Stack.Screen name="create-account" />
         <Stack.Screen name="login" />
         <Stack.Screen name="reset-password" />
@@ -24,6 +23,11 @@ export default function RootLayout() {
         <Stack.Screen name="evaluating" />
         <Stack.Screen name="perfil" />
         <Stack.Screen name="plans" />
+        <Stack.Screen name="home" />
+        <Stack.Screen name="speak" />
+        <Stack.Screen name="practice" />
+        <Stack.Screen name="progress" />
+        <Stack.Screen name="account" />
       </Stack>
     </ThemeProvider>
   );

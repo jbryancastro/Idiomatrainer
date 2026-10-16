@@ -1,5 +1,8 @@
-import { router } from 'expo-router';
+import { analyzeRecording, type SpeechAnalysis } from '@/lib/speech-analysis';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useState } from 'react';
 import {
+    ActivityIndicator,
     ScrollView,
     StyleSheet,
     Text,
@@ -8,15 +11,90 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-const SKILLS = [
-  { id: 'conversacion', icon: '💬', label: 'Conversación', percent: 74 },
-  { id: 'pronunciacion', icon: '🎙️', label: 'Pronunciación', percent: 82 },
-  { id: 'gramatica', icon: '📚', label: 'Gramática', percent: 68 },
-  { id: 'comprension', icon: '👂', label: 'Comprensión', percent: 79 },
-  { id: 'respuesta', icon: '⚡', label: 'Respuesta', percent: 61 },
+const LEVEL_LABELS: Record<SpeechAnalysis['level'], string> = {
+  A1: 'NIVEL PRINCIPIANTE',
+  A2: 'NIVEL BÁSICO',
+  B1: 'NIVEL INTERMEDIO',
+  B2: 'NIVEL INTERMEDIO ALTO',
+  C1: 'NIVEL AVANZADO',
+  C2: 'NIVEL DE DOMINIO',
+};
+
+const SKILLS: Array<{
+  id: keyof SpeechAnalysis['scores'];
+  icon: string;
+  label: string;
+}> = [
+  { id: 'conversation', icon: '💬', label: 'Conversación' },
+  { id: 'pronunciation', icon: '🎙️', label: 'Pronunciación' },
+  { id: 'grammar', icon: '📚', label: 'Gramática' },
+  { id: 'comprehension', icon: '👂', label: 'Comprensión' },
+  { id: 'response', icon: '⚡', label: 'Respuesta' },
 ];
 
 export default function ProfileScreen() {
+  const { uri } = useLocalSearchParams<{ uri?: string }>();
+  const [analysis, setAnalysis] = useState<SpeechAnalysis | null>(null);
+  const [error, setError] = useState(uri ? '' : 'No hay una grabación para analizar.');
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    if (!uri) return;
+    let cancelled = false;
+    setAnalysis(null);
+    setError('');
+
+    analyzeRecording(uri)
+      .then((result) => {
+        if (!cancelled) setAnalysis(result);
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setError(err instanceof Error ? err.message : 'No se pudo analizar la grabación.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [uri, attempt]);
+
+  if (!analysis) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={styles.statusContainer}>
+          {error ? (
+            <>
+              <Text style={styles.statusIcon}>😕</Text>
+              <Text style={styles.statusTitle}>No pudimos analizar tu voz</Text>
+              <Text style={styles.statusText}>{error}</Text>
+              {uri && (
+                <TouchableOpacity
+                  style={styles.startButton}
+                  onPress={() => setAttempt((prev) => prev + 1)}
+                >
+                  <Text style={styles.startButtonText}>REINTENTAR</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={styles.secondaryButton}
+                onPress={() => router.replace('/evaluating')}
+              >
+                <Text style={styles.secondaryButtonText}>VOLVER A GRABAR</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <ActivityIndicator size="large" color="#2F6BFF" />
+              <Text style={styles.statusTitle}>Analizando tu voz con IA…</Text>
+              <Text style={styles.statusText}>Esto puede tardar unos segundos.</Text>
+            </>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <ScrollView
@@ -38,21 +116,24 @@ export default function ProfileScreen() {
         </View>
 
         {/* LEVEL */}
-        <Text style={styles.levelText}>B1</Text>
-        <Text style={styles.levelSubtitle}>NIVEL INTERMEDIO</Text>
+        <Text style={styles.levelText}>{analysis.level}</Text>
+        <Text style={styles.levelSubtitle}>{LEVEL_LABELS[analysis.level]}</Text>
 
         {/* SKILLS */}
         <View style={styles.skillsList}>
-          {SKILLS.map((skill) => (
-            <View key={skill.id} style={styles.skillRow}>
-              <Text style={styles.skillIcon}>{skill.icon}</Text>
-              <Text style={styles.skillLabel}>{skill.label}</Text>
-              <View style={styles.skillBarTrack}>
-                <View style={[styles.skillBarFill, { width: `${skill.percent}%` }]} />
+          {SKILLS.map((skill) => {
+            const percent = analysis.scores[skill.id];
+            return (
+              <View key={skill.id} style={styles.skillRow}>
+                <Text style={styles.skillIcon}>{skill.icon}</Text>
+                <Text style={styles.skillLabel}>{skill.label}</Text>
+                <View style={styles.skillBarTrack}>
+                  <View style={[styles.skillBarFill, { width: `${percent}%` }]} />
+                </View>
+                <Text style={styles.skillPercent}>{percent}%</Text>
               </View>
-              <Text style={styles.skillPercent}>{skill.percent}%</Text>
-            </View>
-          ))}
+            );
+          })}
         </View>
 
         {/* CHALLENGE CARD */}
@@ -61,12 +142,8 @@ export default function ProfileScreen() {
             <Text style={styles.challengeIcon}>🎯</Text>
             <Text style={styles.challengeTitle}>TU PRINCIPAL RETO</Text>
           </View>
-          <Text style={styles.challengeQuote}>
-            “Responder rápidamente durante una conversación.”
-          </Text>
-          <Text style={styles.challengeNote}>
-            No te preocupes. LingoFIT entrenará esto contigo.
-          </Text>
+          <Text style={styles.challengeQuote}>“{analysis.challenge}”</Text>
+          <Text style={styles.challengeNote}>{analysis.tip}</Text>
         </View>
 
         {/* START BUTTON */}
@@ -82,6 +159,50 @@ export default function ProfileScreen() {
 }
 
 const styles = StyleSheet.create({
+  statusContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    gap: 12,
+  },
+
+  statusIcon: {
+    fontSize: 48,
+  },
+
+  statusTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#171923',
+    textAlign: 'center',
+  },
+
+  statusText: {
+    fontSize: 14,
+    color: '#5B6472',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+
+  secondaryButton: {
+    width: '100%',
+    height: 54,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#2F6BFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  secondaryButtonText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#2F6BFF',
+    letterSpacing: 0.5,
+  },
+
   safeArea: {
     flex: 1,
     backgroundColor: '#FFFFFF',

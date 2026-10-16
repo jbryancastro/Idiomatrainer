@@ -39,7 +39,7 @@ export default function WelcomeScreen() {
 
   useEffect(() => {
     if (response?.type === 'success') {
-      router.replace('/explore');
+      router.replace('/home');
     }
   }, [response]);
 
@@ -85,7 +85,7 @@ export default function WelcomeScreen() {
       });
 
       if (credential.identityToken) {
-        router.replace('/explore');
+        router.replace('/home');
       }
     } catch (error: unknown) {
       if ((error as { code?: string }).code !== 'ERR_REQUEST_CANCELED') {
