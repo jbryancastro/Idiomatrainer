@@ -190,14 +190,6 @@ const styles = StyleSheet.create({
 
   headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#0F1B4C' },
-  periodButton: {
-    borderWidth: 1,
-    borderColor: '#DCE4F5',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: '#FFFFFF',
-  },
   subtitle: { fontSize: 13, color: '#5B6788', lineHeight: 18 },
 
   card: {
