@@ -48,15 +48,15 @@ export default function LoginScreen() {
       if (/invalid login credentials/i.test(message)) {
         const hasAccount = await emailHasAccount(email);
         if (hasAccount === false) {
-          Alert.alert('Cuenta no encontrada', 'No existe una cuenta con ese correo. Crea una cuenta para continuar.');
+          setEmailError('No existe una cuenta con ese correo. Crea una cuenta para continuar.');
         } else if (hasAccount === true) {
-          Alert.alert('Contraseña incorrecta', 'La contraseña no coincide con ese correo. Inténtalo de nuevo.');
+          setPasswordError('Contraseña incorrecta. Inténtalo de nuevo.');
         } else {
-          Alert.alert('No se pudo iniciar sesión', 'Correo o contraseña incorrectos.');
+          setPasswordError('Correo o contraseña incorrectos.');
         }
         return;
       }
-      Alert.alert('No se pudo iniciar sesión', message || 'Revisa tu correo y contraseña.');
+      setPasswordError(message || 'No se pudo iniciar sesión. Revisa tu correo y contraseña.');
     }
   };
 
@@ -74,9 +74,8 @@ export default function LoginScreen() {
       );
       router.push({ pathname: '/reset-password', params: { email: email.trim().toLowerCase() } });
     } catch (error) {
-      Alert.alert(
-        'No se pudo enviar el código',
-        error instanceof Error ? error.message : 'Inténtalo nuevamente.'
+      setEmailError(
+        error instanceof Error ? error.message : 'No se pudo enviar el código. Inténtalo nuevamente.'
       );
     }
   };

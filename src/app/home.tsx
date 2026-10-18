@@ -217,7 +217,14 @@ export default function HomeScreen() {
           <TouchableOpacity
             style={styles.startButton}
             onPress={() =>
-              router.push({ pathname: '/speak', params: { topic: recommendation.topic } })
+              router.push({
+                pathname: '/speak',
+                params: {
+                  topic: recommendation.topic,
+                  practice: 'true',
+                  goalAssessment: 'false',
+                },
+              })
             }
           >
             <Text style={styles.startButtonText}>🎙️  ENTRENAR AHORA</Text>
@@ -242,7 +249,12 @@ export default function HomeScreen() {
               key={tab.id}
               style={styles.tabItem}
               onPress={() => {
-                if (tab.id === 'hablar') router.replace('/speak');
+                if (tab.id === 'hablar') {
+                  router.replace({
+                    pathname: '/speak',
+                    params: { practice: 'true', goalAssessment: 'false' },
+                  });
+                }
                 if (tab.id === 'entrenar') router.replace('/practice');
                 if (tab.id === 'progreso') router.replace('/progress');
                 if (tab.id === 'perfil') router.push('/account');

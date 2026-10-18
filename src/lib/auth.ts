@@ -8,7 +8,7 @@ type AuthResponse = {
     id: string;
     email?: string;
     identities?: Array<unknown>;
-    user_metadata?: { full_name?: string; name?: string; level?: string };
+    user_metadata?: { full_name?: string; name?: string };
   };
   msg?: string;
   error_description?: string;
@@ -135,33 +135,6 @@ export const getAccessToken = async (): Promise<string | null> => {
   } catch {
     return null;
   }
-};
-
-const userRequest = async (method: 'GET' | 'PUT', body?: Record<string, unknown>) => {
-  const token = await getAccessToken();
-  if (!supabaseUrl || !supabaseAnonKey || !token) return null;
-
-  const response = await fetch(`${supabaseUrl}/auth/v1/user`, {
-    method,
-    headers: {
-      apikey: supabaseAnonKey,
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  return response.ok ? ((await response.json()) as NonNullable<AuthResponse['user']>) : null;
-};
-
-// Lee el nivel guardado en la cuenta (user_metadata). null si no hay sesión o falla.
-export const fetchAccountLevel = async (): Promise<string | null | undefined> => {
-  const user = await userRequest('GET');
-  return user ? (user.user_metadata?.level ?? null) : undefined;
-};
-
-export const saveAccountLevel = async (level: string): Promise<boolean> => {
-  const user = await userRequest('PUT', { data: { level } });
-  return user !== null;
 };
 
 export const signInWithEmail = async (email: string, password: string) => {

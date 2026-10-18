@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { fetchAccountLevel, getAccessToken, getSessionUser, saveAccountLevel } from '@/lib/auth';
+import { getAccessToken, getSessionUser } from '@/lib/auth';
+import { fetchProgressSnapshot } from '@/lib/practice-progress';
+import { updateLearnerProfile } from '@/lib/profile';
 import { Platform } from 'react-native';
 
 export type SpeechAnalysis = {
@@ -92,31 +94,23 @@ export const saveAssessmentInsights = async (insights: AssessmentInsights) => {
   await AsyncStorage.setItem(await insightsKey(), JSON.stringify(insights));
 };
 
-export const saveAssessmentLevel = async (level: SpeechAnalysis['level']) => {
-  if (!(await saveAccountLevel(level))) {
-    throw new Error('No se pudo guardar el nivel en tu cuenta. Revisa tu conexión e inténtalo de nuevo.');
-  }
-  await AsyncStorage.setItem(await levelKey(), level);
-};
-
 const isLevel = (value: unknown): value is SpeechAnalysis['level'] =>
   typeof value === 'string' && value in LEVEL_NAMES;
 
 export const getSavedLevel = async (): Promise<SpeechAnalysis['level'] | null> => {
   const key = await levelKey();
-  const remote = await fetchAccountLevel();
-
-  if (isLevel(remote)) {
-    await AsyncStorage.setItem(key, remote);
-    return remote;
+  try {
+    const snapshot = await fetchProgressSnapshot();
+    if (isLevel(snapshot.currentLevel)) {
+      await AsyncStorage.setItem(key, snapshot.currentLevel);
+      return snapshot.currentLevel;
+    }
+    return null;
+  } catch (error) {
+    const local = await AsyncStorage.getItem(key);
+    if (isLevel(local)) return local;
+    throw error;
   }
-
-  const local = await AsyncStorage.getItem(key);
-  if (!isLevel(local)) return null;
-
-  // La cuenta aún no tiene nivel pero este dispositivo sí: se sube una vez.
-  if (remote === null) saveAccountLevel(local).catch(() => {});
-  return local;
 };
 
 export const blobToBase64 = (blob: Blob) =>
@@ -162,6 +156,22 @@ export const analyzeRecording = async (uri: string): Promise<SpeechAnalysis> => 
   const analysis = result as SpeechAnalysis;
   await AsyncStorage.setItem(await levelKey(), analysis.level);
   await AsyncStorage.setItem(await scoresKey(), JSON.stringify(analysis.scores)).catch(() => {});
-  await saveAccountLevel(analysis.level).catch(() => {});
+  await updateLearnerProfile({
+    initialAssessment: { level: analysis.level, scores: analysis.scores },
+  }).catch(() => {});
+  const levels: SpeechAnalysis['level'][] = ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'];
+  const nextLevel = levels[levels.indexOf(analysis.level) + 1];
+  if (nextLevel) {
+    await saveAssessmentInsights({
+      ready: false,
+      fromLevel: analysis.level,
+      targetLevel: nextLevel,
+      weaknesses: analysis.challenge ? [analysis.challenge] : [],
+      evidence: 'Evaluación inicial de voz completada.',
+      tip: analysis.tip,
+    }).catch((error: unknown) => {
+      console.warn('Could not cache initial assessment recommendations', error);
+    });
+  }
   return analysis;
 };

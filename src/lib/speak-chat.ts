@@ -1,16 +1,22 @@
 import { getAccessToken } from '@/lib/auth';
 import { blobToBase64, type SpeechAnalysis } from '@/lib/speech-analysis';
+import * as Crypto from 'expo-crypto';
 import { Platform } from 'react-native';
 
 export type ChatTurn = { role: 'user' | 'ia'; text: string };
-type Level = SpeechAnalysis['level'];
 type ConversationMode = 'assessment' | 'practice';
 
 export const ASSESSMENT_TURNS = 5;
 
 export type ConversationAssessment = {
   ready: boolean;
-  scores: SpeechAnalysis['scores'];
+  promotionStatus: 'not_ready' | 'needs_confirmation' | 'promoted';
+  estimatedLevel: SpeechAnalysis['level'];
+  currentLevel: SpeechAnalysis['level'];
+  targetLevel: SpeechAnalysis['level'];
+  scores: Partial<SpeechAnalysis['scores']>;
+  assessedSkills: (keyof SpeechAnalysis['scores'])[];
+  skillEvidence: Partial<Record<keyof SpeechAnalysis['scores'], string>>;
   weaknesses: string[];
   evidence: string;
   tip: string;
@@ -66,10 +72,18 @@ export const fetchQuestionsUsed = async (): Promise<number> => {
 export const sendVoiceTurn = async (
   uri: string,
   history: ChatTurn[],
-  currentLevel: Level,
   scenario?: string,
-  mode: ConversationMode = 'assessment'
-): Promise<{ userText: string; reply: string; used: number; assessment?: ConversationAssessment }> => {
+  mode: ConversationMode = 'assessment',
+  sessionId?: string
+): Promise<{
+  userText: string;
+  reply: string;
+  used: number;
+  assessment?: ConversationAssessment;
+  validPracticeSeconds?: number;
+}> => {
+  if (!sessionId) throw new Error('Inicia una sesión antes de enviar tu voz.');
+
   const blob = await (await fetch(uri)).blob();
   const mimeType = Platform.OS === 'web' && blob.type ? blob.type : 'audio/mp4';
   const audio = await blobToBase64(blob);
@@ -77,10 +91,12 @@ export const sendVoiceTurn = async (
   const result = await callFunction({
     audio,
     mimeType: mimeType.split(';')[0],
-    history,
-    currentLevel,
+    history: mode === 'practice' ? history : undefined,
     scenario,
     mode,
+    practiceSessionId: mode === 'practice' ? sessionId : undefined,
+    assessmentSessionId: mode === 'assessment' ? sessionId : undefined,
+    requestId: mode === 'assessment' ? Crypto.randomUUID() : undefined,
   });
   if (
     typeof result.userText !== 'string' ||
@@ -94,29 +110,40 @@ export const sendVoiceTurn = async (
 
   let assessment: ConversationAssessment | undefined;
   if (result.assessment !== undefined) {
-    if (!isRecord(result.assessment) || typeof result.assessment.ready !== 'boolean') {
+    if (
+      !isRecord(result.assessment) ||
+      typeof result.assessment.ready !== 'boolean' ||
+      !['not_ready', 'needs_confirmation', 'promoted'].includes(String(result.assessment.promotionStatus)) ||
+      !isLevel(result.assessment.estimatedLevel) ||
+      !isLevel(result.assessment.currentLevel) ||
+      !isLevel(result.assessment.targetLevel)
+    ) {
       throw new Error('La IA devolvió una evaluación inesperada.');
     }
-    const scores = result.assessment.scores;
-    if (!isRecord(scores)) throw new Error('La IA devolvió puntuaciones inesperadas.');
+    const scores = isRecord(result.assessment.scores) ? result.assessment.scores : {};
     const validateScore = (value: unknown) => {
       if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 100) {
         throw new Error('La IA devolvió puntuaciones inesperadas.');
       }
       return value;
     };
-    const validatedScores: SpeechAnalysis['scores'] = {
-      conversation: validateScore(scores.conversation),
-      pronunciation: validateScore(scores.pronunciation),
-      grammar: validateScore(scores.grammar),
-      comprehension: validateScore(scores.comprehension),
-      response: validateScore(scores.response),
-    };
+    const skillNames = ['conversation', 'pronunciation', 'grammar', 'comprehension', 'response'] as const;
+    const validatedScores: Partial<SpeechAnalysis['scores']> = {};
+    const skillEvidence: Partial<Record<keyof SpeechAnalysis['scores'], string>> = {};
+    for (const skill of skillNames) {
+      if (scores[skill] !== undefined) validatedScores[skill] = validateScore(scores[skill]);
+      if (
+        isRecord(result.assessment.skillEvidence) &&
+        typeof result.assessment.skillEvidence[skill] === 'string'
+      ) {
+        skillEvidence[skill] = result.assessment.skillEvidence[skill];
+      }
+    }
     if (
       !Array.isArray(result.assessment.weaknesses) ||
       !result.assessment.weaknesses.every((item) => typeof item === 'string') ||
-      typeof result.assessment.evidence !== 'string' ||
-      !result.assessment.evidence.trim() ||
+      typeof result.assessment.evidenceSummary !== 'string' ||
+      !result.assessment.evidenceSummary.trim() ||
       typeof result.assessment.tip !== 'string' ||
       !result.assessment.tip.trim()
     ) {
@@ -124,11 +151,31 @@ export const sendVoiceTurn = async (
     }
     assessment = {
       ready: result.assessment.ready,
+      promotionStatus: result.assessment.promotionStatus as ConversationAssessment['promotionStatus'],
+      estimatedLevel: result.assessment.estimatedLevel,
+      currentLevel: result.assessment.currentLevel,
+      targetLevel: result.assessment.targetLevel,
       scores: validatedScores,
+      assessedSkills: Array.isArray(result.assessment.assessedSkills)
+        ? result.assessment.assessedSkills.filter(
+            (item): item is keyof SpeechAnalysis['scores'] => skillNames.includes(item as keyof SpeechAnalysis['scores'])
+          )
+        : [],
+      skillEvidence,
       weaknesses: result.assessment.weaknesses,
-      evidence: result.assessment.evidence,
+      evidence: result.assessment.evidenceSummary,
       tip: result.assessment.tip,
     };
+  }
+
+  const validPracticeSeconds =
+    typeof result.validPracticeSeconds === 'number' &&
+    Number.isSafeInteger(result.validPracticeSeconds) &&
+    result.validPracticeSeconds > 0
+      ? result.validPracticeSeconds
+      : undefined;
+  if (mode === 'practice' && validPracticeSeconds === undefined) {
+    throw new Error('La IA no confirmó el tiempo válido de práctica.');
   }
 
   return {
@@ -136,5 +183,9 @@ export const sendVoiceTurn = async (
     reply: result.reply,
     used: result.used,
     assessment,
+    validPracticeSeconds,
   };
 };
+
+const isLevel = (value: unknown): value is SpeechAnalysis['level'] =>
+  typeof value === 'string' && ['A1', 'A2', 'B1', 'B2', 'C1', 'C2'].includes(value);

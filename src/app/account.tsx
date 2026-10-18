@@ -1,4 +1,6 @@
 import { clearSessionUser, getSessionUser } from '@/lib/auth';
+import { getSavedLevel } from '@/lib/speech-analysis';
+import { SupportModal } from '@/components/support-modal';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -28,7 +30,6 @@ type MenuItem = {
 
 const MENU: MenuItem[] = [
   { id: 'info', icon: '👤', label: 'Información personal' },
-  { id: 'errores', icon: '🕘', label: 'Historial de errores', badge: '12' },
   { id: 'suscripcion', icon: '💳', label: 'Suscripción', tag: 'FREE' },
   { id: 'config', icon: '⚙️', label: 'Configuración' },
   { id: 'ayuda', icon: '❓', label: 'Ayuda y soporte' },
@@ -38,14 +39,35 @@ const MENU: MenuItem[] = [
 export default function AccountScreen() {
   const activeTab = 'perfil';
   const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [level, setLevel] = useState<string | null>(null);
 
   useEffect(() => {
     getSessionUser().then((user) => {
-      if (user) setUserName(user.name);
+      if (user) {
+        setUserName(user.name);
+        setUserEmail(user.email);
+      }
     });
+    getSavedLevel()
+      .then(setLevel)
+      .catch(() => setLevel(null));
   }, []);
 
   const handleItemPress = async (id: string) => {
+    if (id === 'info') {
+      router.push('/personal-info');
+      return;
+    }
+    if (id === 'config') {
+      router.push('/settings');
+      return;
+    }
+    if (id === 'ayuda') {
+      setSupportOpen(true);
+      return;
+    }
     if (id === 'salir') {
       await clearSessionUser();
       router.replace('/');
@@ -60,7 +82,7 @@ export default function AccountScreen() {
       >
         {/* NOMBRE */}
         <Text style={styles.name}>{userName || 'Usuario'}</Text>
-        <Text style={styles.level}>Nivel B1</Text>
+        <Text style={styles.level}>{level ? `Nivel ${level}` : 'Nivel sin evaluar'}</Text>
 
         {/* MENU */}
         <View style={styles.menu}>
@@ -111,6 +133,11 @@ export default function AccountScreen() {
           );
         })}
       </View>
+      <SupportModal
+        visible={supportOpen}
+        defaultEmail={userEmail}
+        onClose={() => setSupportOpen(false)}
+      />
     </SafeAreaView>
   );
 }

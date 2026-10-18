@@ -5,14 +5,19 @@ import {
   type ConversationAssessment,
 } from '@/lib/speak-chat';
 import { findSimulation } from '@/lib/simulations';
+import { loadSettings } from '@/lib/settings';
 import {
   getSavedLevel,
   LEVEL_NAMES,
   saveAssessmentInsights,
-  saveAssessmentLevel,
-  saveAssessmentScores,
   type SpeechAnalysis,
 } from '@/lib/speech-analysis';
+import {
+  cancelPracticeSession,
+  fetchProgressSnapshot,
+  startAssessmentSession,
+  startPracticeSession,
+} from '@/lib/practice-progress';
 import {
     AudioModule,
     RecordingPresets,
@@ -69,20 +74,26 @@ export default function SpeakScreen() {
     practiceSubtitle,
     practiceGreeting,
     practiceScenario,
+    goalAssessment,
   } = useLocalSearchParams<{
-    topic?: string;
-    practice?: string;
-    practiceTitle?: string;
-    practiceSubtitle?: string;
-    practiceGreeting?: string;
-    practiceScenario?: string;
+    topic?: string | string[];
+    practice?: string | string[];
+    practiceTitle?: string | string[];
+    practiceSubtitle?: string | string[];
+    practiceGreeting?: string | string[];
+    practiceScenario?: string | string[];
+    goalAssessment?: string | string[];
   }>();
-  const practiceMode = practice === 'true';
-  const simulation = findSimulation(topic);
-  const exerciseGreeting = Array.isArray(practiceGreeting) ? practiceGreeting[0] : practiceGreeting;
-  const exerciseScenario = Array.isArray(practiceScenario) ? practiceScenario[0] : practiceScenario;
-  const exerciseTitle = Array.isArray(practiceTitle) ? practiceTitle[0] : practiceTitle;
-  const exerciseSubtitle = Array.isArray(practiceSubtitle) ? practiceSubtitle[0] : practiceSubtitle;
+  const firstParam = (value?: string | string[]) =>
+    Array.isArray(value) ? value[0] : value;
+  const practiceParam = firstParam(practice);
+  const assessmentParam = firstParam(goalAssessment);
+  const practiceMode = practiceParam === 'true' || assessmentParam !== 'true';
+  const simulation = findSimulation(firstParam(topic));
+  const exerciseGreeting = firstParam(practiceGreeting);
+  const exerciseScenario = firstParam(practiceScenario);
+  const exerciseTitle = firstParam(practiceTitle);
+  const exerciseSubtitle = firstParam(practiceSubtitle);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [status, setStatus] = useState<Status>('idle');
@@ -91,6 +102,8 @@ export default function SpeakScreen() {
   const statusRef = useRef<Status>('idle');
   const autoStopRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const greetingSpokenRef = useRef(false);
+  const practiceSessionRef = useRef<string | null>(null);
+  const assessmentSessionRef = useRef<string | null>(null);
 
   const [level, setLevel] = useState<SpeechAnalysis['level'] | null>(null);
   const [levelLoaded, setLevelLoaded] = useState(false);
@@ -99,23 +112,36 @@ export default function SpeakScreen() {
     from: SpeechAnalysis['level'];
     to: SpeechAnalysis['level'];
   } | null>(null);
-  const [savingLevel, setSavingLevel] = useState(false);
-  const [levelConfirmed, setLevelConfirmed] = useState(false);
   const targetLevel = level ? LEVELS[LEVELS.indexOf(level) + 1] : undefined;
   const answeredTurns = messages.filter((message) => message.role === 'user').length;
 
   useEffect(() => {
     let active = true;
     getSavedLevel()
-      .then((saved) => {
+      .then(async (saved) => {
+        if (!saved) {
+          if (active) {
+            setLevel(null);
+            setLevelLoaded(true);
+            setError('Completa primero la evaluación inicial para conocer tu nivel.');
+          }
+          return;
+        }
+        let officialLevel = saved;
+        if (!practiceMode && saved !== 'C2') {
+          const session = await startAssessmentSession();
+          assessmentSessionRef.current = session.assessmentSessionId;
+          officialLevel = session.currentLevel;
+        }
         if (!active) return;
-        setLevel(saved);
+        setLevel(officialLevel);
         setLevelLoaded(true);
-        if (!saved) setError('Completa primero la evaluación inicial para conocer tu nivel.');
-        else if (saved !== 'C2') {
-          const nextLevel = LEVELS[LEVELS.indexOf(saved) + 1];
+        if (officialLevel !== 'C2') {
+          const nextLevel = LEVELS[LEVELS.indexOf(officialLevel) + 1];
           const opening = practiceMode
-            ? exerciseGreeting ?? 'Let’s practice together. Tell me about something you did recently.'
+            ? exerciseGreeting ??
+              simulation?.greeting ??
+              'Let’s practice together. Tell me about something you did recently.'
             : simulation?.greeting ?? OPENING_QUESTIONS[nextLevel];
           setMessages([{ role: 'ia', text: opening }]);
         } else {
@@ -144,10 +170,12 @@ export default function SpeakScreen() {
     setStatus(next);
   };
 
-  const speak = (text: string) => {
+  const speak = async (text: string) => {
     updateStatus('speaking');
+    const { voiceAccent, speechRate } = await loadSettings();
     Speech.speak(text, {
-      language: 'en-US',
+      language: voiceAccent,
+      rate: speechRate,
       onDone: () => {
         if (statusRef.current === 'speaking') updateStatus('idle');
       },
@@ -158,6 +186,23 @@ export default function SpeakScreen() {
         if (statusRef.current === 'speaking') updateStatus('idle');
       },
     });
+  };
+
+  const restartAssessment = async () => {
+    setError('');
+    try {
+      const session = await startAssessmentSession();
+      assessmentSessionRef.current = session.assessmentSessionId;
+      setLevel(session.currentLevel);
+      setAssessment(null);
+      setAssessmentTransition(null);
+      const opening = OPENING_QUESTIONS[session.targetLevel];
+      setMessages([{ role: 'ia', text: opening }]);
+      greetingSpokenRef.current = true;
+      speak(opening);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No se pudo iniciar otra evaluación.');
+    }
   };
 
   useEffect(() => {
@@ -178,6 +223,11 @@ export default function SpeakScreen() {
       Speech.stop();
       if (autoStopRef.current) clearTimeout(autoStopRef.current);
       if (statusRef.current === 'listening') recorder.stop().catch(() => {});
+      if (practiceSessionRef.current) {
+        cancelPracticeSession(practiceSessionRef.current).catch((error: unknown) =>
+          console.error('Could not cancel practice session', error)
+        );
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
@@ -199,18 +249,36 @@ export default function SpeakScreen() {
       }
       await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
       await recorder.prepareToRecordAsync();
+      if (practiceMode) {
+        const session = await startPracticeSession(
+          simulation ? 'simulation' : exerciseTitle ? 'weakness' : 'conversation'
+        );
+        practiceSessionRef.current = session.practiceSessionId;
+        setLevel(session.currentLevel);
+      } else if (!assessmentSessionRef.current) {
+        const session = await startAssessmentSession();
+        assessmentSessionRef.current = session.assessmentSessionId;
+        setLevel(session.currentLevel);
+      }
       recorder.record();
       updateStatus('listening');
       autoStopRef.current = setTimeout(() => {
         if (statusRef.current === 'listening') finishListening();
       }, MAX_RECORDING_MS);
-    } catch {
-      setError('No se pudo iniciar la grabación.');
+    } catch (err) {
+      if (practiceSessionRef.current) {
+        await cancelPracticeSession(practiceSessionRef.current).catch((error: unknown) =>
+          console.error('Could not cancel practice session', error)
+        );
+        practiceSessionRef.current = null;
+      }
+      setError(err instanceof Error ? err.message : 'No se pudo iniciar la grabación.');
       updateStatus('idle');
     }
   };
 
   const finishListening = async () => {
+    if (statusRef.current !== 'listening') return;
     if (autoStopRef.current) clearTimeout(autoStopRef.current);
     updateStatus('thinking');
     try {
@@ -222,22 +290,27 @@ export default function SpeakScreen() {
       if (!level || (!targetLevel && !practiceMode)) {
         throw new Error('No se pudo determinar tu nivel actual.');
       }
-      const { userText, reply, assessment: finalAssessment } = await sendVoiceTurn(
+      const {
+        userText,
+        reply,
+        assessment: finalAssessment,
+      } = await sendVoiceTurn(
         recorder.uri,
         messages,
-        level,
-        practiceMode ? exerciseScenario : simulation?.scenario,
-        practiceMode ? 'practice' : 'assessment'
+        practiceMode ? exerciseScenario ?? simulation?.scenario : simulation?.scenario,
+        practiceMode ? 'practice' : 'assessment',
+        practiceMode ? practiceSessionRef.current ?? undefined : assessmentSessionRef.current ?? undefined
       );
+      if (practiceMode) practiceSessionRef.current = null;
       if (isFinalTurn && !finalAssessment) {
         throw new Error('La IA no completó la evaluación. Inténtalo de nuevo.');
       }
       let assessmentTarget: SpeechAnalysis['level'] | undefined;
       if (finalAssessment) {
-        if (practiceMode || !targetLevel) {
+        if (practiceMode) {
           throw new Error('La IA devolvió una evaluación en un ejercicio de práctica.');
         }
-        assessmentTarget = targetLevel;
+        assessmentTarget = finalAssessment.targetLevel;
       }
       setMessages((current) => [
         ...current,
@@ -247,24 +320,47 @@ export default function SpeakScreen() {
       speak(reply);
       if (finalAssessment) {
         if (!assessmentTarget) throw new Error('No se pudo determinar el nivel objetivo.');
+        assessmentSessionRef.current = null;
         setAssessment(finalAssessment);
-        setAssessmentTransition({ from: level, to: assessmentTarget });
-        Promise.all([
-          saveAssessmentScores(finalAssessment.scores),
-          saveAssessmentInsights({
+        setAssessmentTransition({ from: finalAssessment.currentLevel, to: assessmentTarget });
+        saveAssessmentInsights({
             ...finalAssessment,
-            fromLevel: level,
+            fromLevel: finalAssessment.currentLevel,
             targetLevel: assessmentTarget,
-          }),
-        ]).catch((saveError: unknown) => {
+          }).catch((saveError: unknown) => {
           setError(
             saveError instanceof Error
-              ? `La evaluación terminó, pero no se pudieron guardar los resultados: ${saveError.message}`
-              : 'La evaluación terminó, pero no se pudieron guardar los resultados.'
+              ? `La evaluación se guardó en Supabase, pero no se pudo actualizar la caché local: ${saveError.message}`
+              : 'La evaluación se guardó en Supabase, pero no se pudo actualizar la caché local.'
           );
         });
+        if (finalAssessment.ready) setLevel(assessmentTarget);
+      }
+      if (practiceMode) {
+        try {
+          const progress = await fetchProgressSnapshot();
+          if (progress.progressPercent === 100 && level !== 'C2') {
+            router.push({
+              pathname: '/speak',
+              params: { practice: 'false', goalAssessment: 'true' },
+            });
+            return;
+          }
+        } catch (progressError) {
+          setError(
+            progressError instanceof Error
+              ? `La práctica se guardó, pero no se pudo actualizar la barra: ${progressError.message}`
+              : 'La práctica se guardó, pero no se pudo actualizar la barra.'
+          );
+        }
       }
     } catch (err) {
+      if (practiceSessionRef.current) {
+        await cancelPracticeSession(practiceSessionRef.current).catch((cancelError: unknown) =>
+          console.error('Could not cancel failed practice session', cancelError)
+        );
+        practiceSessionRef.current = null;
+      }
       setError(err instanceof Error ? err.message : 'No se pudo obtener la respuesta.');
       updateStatus('idle');
     }
@@ -283,21 +379,6 @@ export default function SpeakScreen() {
   const listening = status === 'listening';
   const loading = !levelLoaded;
 
-  const confirmLevel = async () => {
-    if (!assessment?.ready || !targetLevel) return;
-    setSavingLevel(true);
-    setError('');
-    try {
-      await saveAssessmentLevel(targetLevel);
-      setLevel(targetLevel);
-      setLevelConfirmed(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'No se pudo guardar el nuevo nivel.');
-    } finally {
-      setSavingLevel(false);
-    }
-  };
-
   return (
     <SafeAreaView style={styles.safeArea}>
       {/* HEADER */}
@@ -307,7 +388,9 @@ export default function SpeakScreen() {
         </TouchableOpacity>
         <View style={styles.headerTitleRow}>
           <Text style={styles.headerTitle}>
-            {practiceMode ? exerciseTitle ?? 'Práctica personalizada' : simulation?.title ?? 'Evaluación de nivel'}
+            {practiceMode
+              ? exerciseTitle ?? simulation?.title ?? 'Conversación con IA'
+              : simulation?.title ?? 'Evaluación de progreso'}
           </Text>
           <View style={styles.iaBadge}>
             <Text style={styles.iaBadgeText}>IA</Text>
@@ -323,13 +406,20 @@ export default function SpeakScreen() {
         <View style={styles.usageHeader}>
           <View>
             <Text style={styles.usageTitle}>
-              {practiceMode ? 'Práctica personalizada' : 'Evaluación conversacional'}
+              {practiceMode
+                ? exerciseTitle
+                  ? 'Práctica personalizada'
+                  : simulation?.title ?? 'Conversación con IA'
+                : 'Evaluación de progreso'}
             </Text>
             <Text style={styles.usageSubtitle}>
               {loading
                 ? 'Cargando tu nivel…'
                 : practiceMode
-                  ? exerciseSubtitle ?? 'Practica la debilidad detectada por la IA'
+                  ? exerciseSubtitle ??
+                    (exerciseTitle
+                      ? 'Practica la debilidad detectada por la IA'
+                      : simulation?.subtitle ?? 'Conversación abierta: practica a tu ritmo.')
                   : level && targetLevel
                   ? `Objetivo: ${level} → ${targetLevel}`
                   : level === 'C2'
@@ -409,12 +499,16 @@ export default function SpeakScreen() {
         {assessment && assessmentTransition && (
           <View style={styles.assessmentCard}>
             <Text style={styles.assessmentTitle}>
-              {assessment.ready ? '¡Estás preparado para avanzar!' : 'Sigue fortaleciendo tu inglés'}
+              {assessment.ready
+                ? `¡Felicidades! Has avanzado de ${assessmentTransition.from} a ${assessmentTransition.to}.`
+                : assessment.promotionStatus === 'needs_confirmation'
+                  ? 'La evaluación muestra preparación; falta una segunda evaluación comparable.'
+                  : 'Sigue fortaleciendo tu inglés antes de avanzar.'}
             </Text>
             <Text style={styles.assessmentLevel}>
               Evaluación {assessmentTransition.from} → {assessmentTransition.to}
             </Text>
-            <Text style={styles.assessmentSectionTitle}>Puntuaciones</Text>
+            <Text style={styles.assessmentSectionTitle}>Competencias con evidencia</Text>
             {([
               ['Conversación', assessment.scores.conversation],
               ['Pronunciación', assessment.scores.pronunciation],
@@ -424,7 +518,9 @@ export default function SpeakScreen() {
             ] as const).map(([label, score]) => (
               <View key={label} style={styles.assessmentScoreRow}>
                 <Text style={styles.assessmentScoreLabel}>{label}</Text>
-                <Text style={styles.assessmentScoreValue}>{score}/100</Text>
+                <Text style={styles.assessmentScoreValue}>
+                  {score === undefined ? 'Sin evidencia suficiente' : `${score}/100`}
+                </Text>
               </View>
             ))}
             <Text style={styles.assessmentSectionTitle}>Lo que observó la IA</Text>
@@ -441,24 +537,21 @@ export default function SpeakScreen() {
             )}
             <Text style={styles.assessmentTip}>{assessment.tip}</Text>
             <Text style={styles.assessmentDisclaimer}>
-              Resultado orientativo; no sustituye una certificación oficial del MCER.
+              Resultado orientativo; el ascenso se confirma y guarda únicamente en el servidor. No sustituye una certificación oficial del MCER.
             </Text>
-            {assessment.ready &&
-              (levelConfirmed ? (
-                <Text style={styles.confirmedText}>
-                  Tu nivel ahora es {assessmentTransition.to} · {LEVEL_NAMES[assessmentTransition.to]}
-                </Text>
-              ) : (
-                <TouchableOpacity
-                  style={styles.noticeButton}
-                  disabled={savingLevel}
-                  onPress={confirmLevel}
-                >
-                  <Text style={styles.noticeButtonText}>
-                    {savingLevel ? 'GUARDANDO…' : `ACTUALIZAR MI NIVEL A ${assessmentTransition.to}`}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            {assessment.ready ? (
+              <Text style={styles.confirmedText}>
+                Tu nivel confirmado es {assessmentTransition.to} · {LEVEL_NAMES[assessmentTransition.to]}
+              </Text>
+            ) : assessment.promotionStatus === 'needs_confirmation' ? (
+              <TouchableOpacity style={styles.noticeButton} onPress={restartAssessment}>
+                <Text style={styles.noticeButtonText}>INICIAR OTRA EVALUACIÓN COMPARABLE</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity style={styles.noticeButton} onPress={() => router.push('/practice')}>
+                <Text style={styles.noticeButtonText}>PRACTICAR Y VOLVER A EVALUAR</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -495,7 +588,7 @@ export default function SpeakScreen() {
         </TouchableOpacity>
         <Text style={styles.micLabel}>
           {loading
-            ? 'Cargando evaluación…'
+            ? 'Cargando tu nivel…'
             : !level
               ? 'Completa primero la evaluación inicial'
               : !targetLevel && !practiceMode

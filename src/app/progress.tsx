@@ -1,13 +1,18 @@
 import {
-  getSavedAssessmentInsights,
   getSavedLevel,
+  getSavedAssessmentInsights,
   getSavedScores,
   LEVEL_NAMES,
   type AssessmentInsights,
   type SpeechAnalysis,
 } from '@/lib/speech-analysis';
+import {
+  fetchProgressSnapshot,
+  getCachedProgressSnapshot,
+  type ProgressSnapshot,
+} from '@/lib/practice-progress';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -32,60 +37,137 @@ const SKILLS: { key: keyof Scores; icon: string; label: string; focus: string }[
   { key: 'grammar', icon: '📚', label: 'Gramática', focus: 'tu gramática' },
 ];
 
-const average = (scores: Scores) => {
-  const values = SKILLS.map((skill) => scores[skill.key]);
-  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
-};
-
 export default function ProgressScreen() {
   const activeTab = 'progreso';
   const { width } = useWindowDimensions();
   const wide = width >= 900;
   const [level, setLevel] = useState<Level | null>(null);
-  const [scores, setScores] = useState<Scores | null>(null);
+  const [scores, setScores] = useState<Partial<Scores> | null>(null);
   const [insights, setInsights] = useState<AssessmentInsights | null>(null);
+  const [snapshot, setSnapshot] = useState<ProgressSnapshot | null>(null);
+  const [practiceProgressLoaded, setPracticeProgressLoaded] = useState(false);
   const [loadError, setLoadError] = useState('');
+  const goalAssessmentStarted = useRef<Level | null>(null);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      getSavedLevel()
-        .then((saved) => active && setLevel(saved))
-        .catch((error: unknown) => {
-          if (active) {
-            setLoadError(error instanceof Error ? error.message : 'No se pudo cargar tu nivel.');
-          }
+      setLoadError('');
+      setPracticeProgressLoaded(false);
+      Promise.all([
+        fetchProgressSnapshot(),
+        getSavedScores(),
+      ]).then(([remoteSnapshot, cachedScores]) => {
+        if (!active) return;
+        setSnapshot(remoteSnapshot);
+        setLevel(remoteSnapshot.currentLevel);
+        const assessmentScores = remoteSnapshot.latestAssessment?.scores;
+        setScores(assessmentScores ?? cachedScores);
+        const latest = remoteSnapshot.latestAssessment;
+        const recommendationLevel = remoteSnapshot.nextLevel;
+        setInsights(
+          latest && latest.assessment_type === 'progression' && latest.from_level && latest.to_level
+            ? {
+                ready: latest.recommendation === 'promote',
+                fromLevel: latest.from_level,
+                targetLevel: latest.to_level,
+                weaknesses: latest.weaknesses,
+                evidence: latest.evidence_summary,
+                tip: latest.tip,
+              }
+            : latest?.assessment_type === 'initial' &&
+                remoteSnapshot.currentLevel &&
+                recommendationLevel
+              ? {
+                  ready: false,
+                  fromLevel: remoteSnapshot.currentLevel,
+                  targetLevel: recommendationLevel,
+                  weaknesses: latest.weaknesses,
+                  evidence: latest.evidence_summary,
+                  tip: latest.tip,
+                }
+            : null
+        );
+        setPracticeProgressLoaded(true);
+      }).catch((error: unknown) => {
+        Promise.all([
+          getCachedProgressSnapshot(),
+          getSavedLevel().catch((levelError: unknown) => {
+            console.warn('Could not load locally cached level', levelError);
+            return null;
+          }),
+          getSavedScores(),
+          getSavedAssessmentInsights().catch((cacheError: unknown) => {
+            console.warn('Could not load cached assessment insights', cacheError);
+            return null;
+          }),
+        ]).then(([cachedSnapshot, cachedLevel, cachedScores, cachedInsights]) => {
+          if (!active) return;
+          setSnapshot(cachedSnapshot);
+          setLevel(cachedSnapshot?.currentLevel ?? cachedLevel);
+          setScores(cachedSnapshot?.latestAssessment?.scores ?? cachedScores);
+          setInsights(cachedInsights);
+          setLoadError(
+            `${error instanceof Error ? error.message : 'No se pudo cargar tu progreso.'}` +
+              (cachedSnapshot ? ' Se muestran los últimos datos guardados en este dispositivo.' : '')
+          );
+          setPracticeProgressLoaded(true);
         });
-      getSavedScores()
-        .then((saved) => active && setScores(saved))
-        .catch((error: unknown) => {
-          if (active) {
-            setLoadError(error instanceof Error ? error.message : 'No se pudieron cargar tus puntuaciones.');
-          }
-        });
-      getSavedAssessmentInsights()
-        .then((saved) => active && setInsights(saved))
-        .catch((error: unknown) => {
-          if (active) {
-            setLoadError(error instanceof Error ? error.message : 'No se pudieron cargar las recomendaciones.');
-          }
-        });
+      });
       return () => {
         active = false;
       };
     }, [])
   );
 
-  const next = level ? LEVELS[LEVELS.indexOf(level) + 1] : undefined;
-  const progress = scores ? average(scores) : 0;
-  const weakest = scores
-    ? SKILLS.reduce((low, skill) => (scores[skill.key] < scores[low.key] ? skill : low))
+  const next = snapshot
+    ? snapshot.nextLevel ?? undefined
+    : level
+      ? LEVELS[LEVELS.indexOf(level) + 1]
+      : undefined;
+  const progress = snapshot?.progressPercent ?? 0;
+  const transitionSeconds = snapshot?.transitionPracticeSeconds ?? 0;
+  const targetHours = snapshot?.rule?.targetHours ?? 0;
+  const practicedHours = transitionSeconds / 3600;
+  const remainingHours = next
+    ? Math.max(0, Math.ceil(targetHours - practicedHours))
+    : 0;
+  const latestAssessment = snapshot?.latestAssessment;
+  const scoredSkills = SKILLS.filter((skill) => typeof scores?.[skill.key] === 'number');
+  const weakest = scoredSkills.length
+    ? scoredSkills.reduce((low, skill) =>
+        (scores?.[skill.key] ?? 0) < (scores?.[low.key] ?? 0) ? skill : low
+      )
     : null;
+
+  useEffect(() => {
+    if (
+      practiceProgressLoaded &&
+      !loadError &&
+      level &&
+      level !== 'C2' &&
+      snapshot?.progressPercent === 100 &&
+      latestAssessment?.recommendation !== 'continue' &&
+      goalAssessmentStarted.current !== level
+    ) {
+      goalAssessmentStarted.current = level;
+      router.push({
+        pathname: '/speak',
+        params: { practice: 'false', goalAssessment: 'true' },
+      });
+    }
+  }, [level, snapshot, latestAssessment?.recommendation, practiceProgressLoaded, loadError]);
 
   const goalText = !level
     ? 'Haz tu evaluación de voz para conocer tu nivel y tus habilidades.'
     : next
-      ? `Para avanzar a ${next}, mejora especialmente ${weakest ? weakest.focus : 'tu vocabulario y pronunciación'}.`
+      ? latestAssessment?.recommendation === 'continue'
+        ? progress >= 100
+          ? `Completaste las horas estimadas, pero necesitas reforzar ${weakest ? weakest.focus : 'algunas habilidades'} antes de avanzar a ${next}.`
+          : `La evaluación recomienda reforzar ${weakest ? weakest.focus : 'algunas habilidades'} antes de avanzar a ${next}.`
+        : latestAssessment?.recommendation === 'promote'
+          ? `La IA recomienda otra evaluación comparable antes de confirmar tu avance a ${next}.`
+          : `Para avanzar a ${next}, mejora especialmente ${weakest ? weakest.focus : 'tus habilidades'}.`
       : 'Has alcanzado el nivel más alto. ¡Sigue practicando para mantenerlo!';
 
   return (
@@ -107,13 +189,25 @@ export default function ProgressScreen() {
               <Text style={styles.badgeText}>{level ?? '?'}</Text>
             </View>
             <View style={styles.levelInfo}>
-              <Text style={styles.smallCaps}>TU NIVEL ACTUAL</Text>
-              <Text style={styles.levelTitle}>
-                {level ? `${level} · ${LEVEL_NAMES[level]}` : 'Sin evaluar'}
-              </Text>
+              <View style={styles.levelHeadings}>
+                <Text style={styles.smallCaps}>NIVEL ACTUAL</Text>
+                <Text style={styles.smallCaps}>PRÓXIMO NIVEL</Text>
+              </View>
+              <View style={styles.levelHeadings}>
+                <Text style={styles.levelTitle}>
+                  {level ? `${level} · ${LEVEL_NAMES[level]}` : 'Sin evaluar'}
+                </Text>
+                <Text style={styles.progressNext}>{next ?? '—'}</Text>
+              </View>
               <Text style={styles.levelText}>
                 {level
-                  ? 'Tienes una buena base. Ahora la IA te ayudará a fortalecer tus habilidades para avanzar al siguiente nivel.'
+                  ? snapshot?.latestPromotion?.to_level === level
+                    ? `¡Felicidades! Has avanzado de ${snapshot.latestPromotion.from_level} a ${level}.`
+                    : latestAssessment?.recommendation === 'promote'
+                      ? `La IA recomienda ${next}; falta una evaluación comparable para confirmar el ascenso.`
+                      : insights && insights.targetLevel === next && !insights.ready
+                        ? `Conservas ${level}. Sigue las recomendaciones personalizadas y practica para volver a intentarlo.`
+                        : 'Practica para alcanzar la meta estimada y demostrar las competencias del siguiente nivel.'
                   : 'Aún no tienes un nivel. Haz la evaluación para obtenerlo.'}
               </Text>
             </View>
@@ -123,20 +217,46 @@ export default function ProgressScreen() {
 
           <View style={wide && styles.colWide}>
             <View style={styles.progressHeader}>
-              <Text style={styles.progressLabel}>Progreso hacia el siguiente nivel</Text>
-              <Text style={styles.progressNext}>{next ?? level ?? ''}</Text>
+              <Text style={styles.progressLabel}>Horas de práctica</Text>
+              <Text style={styles.progressNext}>
+                {!next
+                  ? '—'
+                  : practiceProgressLoaded
+                    ? snapshot
+                      ? `${practicedHours.toFixed(2)} / ${targetHours} h`
+                      : '—'
+                    : 'Cargando…'}
+              </Text>
             </View>
             <View style={styles.track}>
               <View style={[styles.fill, { width: `${progress}%` }]} />
             </View>
-            <Text style={styles.progressPercent}>{progress}%</Text>
-            <Text style={styles.progressHint}>
-              {next
-                ? scores
-                  ? 'Promedio de las cinco habilidades evaluadas por la IA.'
-                  : `Completa una evaluación para medir tu avance hacia ${next}.`
-                : 'Mantén tus habilidades practicando con la IA.'}
+            <Text style={styles.progressPercent}>
+              {snapshot && next ? `${progress.toFixed(1)}%` : '—'}
             </Text>
+            <Text style={styles.progressHint}>
+              {!snapshot && loadError
+                ? 'No se pudieron consultar las horas de práctica guardadas.'
+                : !level
+                ? 'Haz tu evaluación inicial para establecer tu nivel.'
+                : next
+                  ? progress >= 100
+                    ? latestAssessment?.recommendation === 'continue'
+                      ? 'Completaste las horas estimadas. Refuerza habilidades y vuelve a evaluar.'
+                      : latestAssessment?.recommendation === 'promote'
+                        ? 'La evaluación recomienda avanzar; falta confirmar con otra evaluación comparable.'
+                        : 'Has completado las horas de práctica estimadas. Es momento de comprobar tus competencias.'
+                    : `Restan aproximadamente ${remainingHours} h para el objetivo de ${targetHours} h · estimación ${snapshot?.rule?.minHours}–${snapshot?.rule?.maxHours} h`
+                  : 'Has alcanzado el nivel máximo. Sigue practicando para mantenerlo.'}
+            </Text>
+            {snapshot ? (
+              <Text style={styles.progressHint}>
+                Total histórico: {(snapshot.totalPracticeSeconds / 3600).toFixed(2)} h
+                {snapshot.rule
+                  ? ` · rango orientativo ${snapshot.rule.minHours}–${snapshot.rule.maxHours} h`
+                  : ''}
+              </Text>
+            ) : null}
           </View>
 
           <View style={wide ? styles.dividerVertical : styles.spacer} />
@@ -144,7 +264,7 @@ export default function ProgressScreen() {
           <View style={[styles.goalCard, wide && styles.colWide]}>
             <Text style={styles.goalTitle}>🎯  Siguiente objetivo</Text>
             <Text style={styles.goalText}>{goalText}</Text>
-            {next && insights && (
+            {next && insights && insights.targetLevel === next && (
               <View style={styles.recommendations}>
                 <Text style={styles.recommendationsTitle}>
                   Recomendaciones de la IA ({insights.fromLevel} → {insights.targetLevel})
@@ -158,15 +278,23 @@ export default function ProgressScreen() {
                 <Text style={styles.recommendationTip}>{insights.tip}</Text>
               </View>
             )}
-            <TouchableOpacity onPress={() => router.push(level ? '/practice' : '/evaluating')}>
+            <TouchableOpacity
+              onPress={() =>
+                router.push(!level ? '/evaluating' : snapshot && progress >= 100 ? '/speak' : '/practice')
+              }
+            >
               <Text style={styles.goalLink}>
-                {level ? 'Ver recomendaciones →' : 'Hacer evaluación →'}
+                {!level
+                  ? 'Hacer evaluación →'
+                  : snapshot && progress >= 100
+                    ? 'Comprobar competencias →'
+                    : 'Ver recomendaciones →'}
               </Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        {loadError ? <Text style={styles.loadError}>{loadError}</Text> : null}
+        {!level && loadError ? <Text style={styles.loadError}>{loadError}</Text> : null}
 
         {/* SKILLS */}
         <View style={styles.card}>
@@ -177,7 +305,8 @@ export default function ProgressScreen() {
 
           <View style={[styles.skillsWrap, wide && styles.skillsWrapWide]}>
             {SKILLS.map((skill) => {
-              const value = scores?.[skill.key] ?? 0;
+              const value = scores?.[skill.key];
+              const hasScore = typeof value === 'number';
               return (
                 <View key={skill.key} style={[styles.skillCard, wide && styles.skillCardWide]}>
                   <View style={styles.skillHeader}>
@@ -188,12 +317,12 @@ export default function ProgressScreen() {
                       {skill.label}
                     </Text>
                     <Text style={styles.skillScore}>
-                      {scores ? value : '–'}
-                      <Text style={styles.skillMax}>/100</Text>
+                      {hasScore ? value : '–'}
+                      {hasScore ? <Text style={styles.skillMax}>/100</Text> : null}
                     </Text>
                   </View>
                   <View style={styles.track}>
-                    <View style={[styles.fill, { width: `${value}%` }]} />
+                    <View style={[styles.fill, { width: `${hasScore ? value : 0}%` }]} />
                   </View>
                 </View>
               );
@@ -272,6 +401,7 @@ const styles = StyleSheet.create({
   },
   badgeText: { fontSize: 26, fontWeight: '900', color: '#2F6BFF' },
   levelInfo: { flex: 1 },
+  levelHeadings: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   smallCaps: { fontSize: 10, fontWeight: '700', color: '#5B6788', letterSpacing: 0.5 },
   levelTitle: { fontSize: 22, fontWeight: '900', color: '#0F1B4C', marginVertical: 4 },
   levelText: { fontSize: 12, color: '#5B6788', lineHeight: 17 },
@@ -288,7 +418,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontSize: 14,
     fontWeight: '800',
-    color: '#2F6BFF',
+    color: '#16A34A',
   },
   progressHint: { fontSize: 11, color: '#5B6788', marginTop: 2 },
 

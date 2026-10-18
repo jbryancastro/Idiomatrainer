@@ -105,6 +105,7 @@ export default function PracticeScreen() {
                     pathname: '/speak',
                     params: {
                       practice: 'true',
+                      goalAssessment: 'false',
                       practiceTitle: exercise.title,
                       practiceSubtitle: exercise.subtitle,
                       practiceGreeting: exercise.greeting,
@@ -121,7 +122,14 @@ export default function PracticeScreen() {
               Cuando completes una evaluación conversacional, aquí aparecerán ejercicios creados
               para tus debilidades.
             </Text>
-            <TouchableOpacity onPress={() => router.push('/speak')}>
+            <TouchableOpacity
+              onPress={() =>
+                router.push({
+                  pathname: '/speak',
+                  params: { practice: 'false', goalAssessment: 'true' },
+                })
+              }
+            >
               <Text style={styles.emptyLink}>Hacer evaluación conversacional →</Text>
             </TouchableOpacity>
           </View>
@@ -134,7 +142,20 @@ export default function PracticeScreen() {
             <ItemCard
               key={item.id}
               item={item}
-              onPress={() => router.push({ pathname: '/speak', params: { topic: item.id } })}
+              onPress={() =>
+                router.push({
+                  pathname: '/speak',
+                  params: {
+                    topic: item.id,
+                    practice: 'true',
+                    goalAssessment: 'false',
+                    practiceTitle: item.title,
+                    practiceSubtitle: item.subtitle,
+                    practiceGreeting: item.greeting,
+                    practiceScenario: item.scenario,
+                  },
+                })
+              }
             />
           ))}
         </View>

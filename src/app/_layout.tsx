@@ -3,11 +3,14 @@ import * as SplashScreen from 'expo-splash-screen';
 import { useColorScheme } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import { useSettings } from '@/lib/settings';
 
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  const systemScheme = useColorScheme();
+  const { theme } = useSettings();
+  const colorScheme = theme === 'system' ? systemScheme : theme;
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
       <AnimatedSplashOverlay />
@@ -28,6 +31,8 @@ export default function RootLayout() {
         <Stack.Screen name="practice" />
         <Stack.Screen name="progress" />
         <Stack.Screen name="account" />
+        <Stack.Screen name="personal-info" />
+        <Stack.Screen name="settings" />
       </Stack>
     </ThemeProvider>
   );
