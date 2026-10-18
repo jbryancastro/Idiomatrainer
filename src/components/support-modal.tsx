@@ -1,7 +1,7 @@
-import { Linking, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useEffect, useState } from 'react';
 
-const SUPPORT_EMAIL = process.env.EXPO_PUBLIC_SUPPORT_EMAIL;
+const SUPPORT_ENDPOINT = 'https://formspree.io/f/xnjdjndl';
 
 const TOPICS = ['Problema técnico', 'Mi cuenta', 'Suscripción o plan', 'Sugerencia de mejora', 'Otro'];
 
@@ -17,9 +17,14 @@ export function SupportModal({ visible, defaultEmail, onClose }: Props) {
   const [subject, setSubject] = useState('');
   const [details, setDetails] = useState('');
   const [error, setError] = useState('');
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
 
   useEffect(() => {
-    if (visible) setEmail((current) => current || defaultEmail);
+    if (visible) {
+      setSent(false);
+      setEmail((current) => current || defaultEmail);
+    }
   }, [visible, defaultEmail]);
 
   const submit = async () => {
@@ -31,22 +36,28 @@ export function SupportModal({ visible, defaultEmail, onClose }: Props) {
       setError('Completa el asunto y la descripción de tu consulta.');
       return;
     }
-    if (!SUPPORT_EMAIL) {
-      setError('Falta configurar EXPO_PUBLIC_SUPPORT_EMAIL en .env.local.');
-      return;
-    }
-    const body = `Tipo de consulta: ${topic}\nCorreo de contacto: ${email.trim()}\n\n${details.trim()}`;
-    const url = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
-      `[${topic}] ${subject.trim()}`
-    )}&body=${encodeURIComponent(body)}`;
+    setSending(true);
     try {
-      await Linking.openURL(url);
+      const response = await fetch(SUPPORT_ENDPOINT, {
+        method: 'POST',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: email.trim(),
+          topic,
+          subject: subject.trim(),
+          message: details.trim(),
+          _subject: `[${topic}] ${subject.trim()}`,
+        }),
+      });
+      if (!response.ok) throw new Error('send failed');
       setSubject('');
       setDetails('');
       setError('');
-      onClose();
+      setSent(true);
     } catch {
-      setError('No se pudo abrir tu aplicación de correo.');
+      setError('No se pudo enviar tu consulta. Inténtalo de nuevo en un momento.');
+    } finally {
+      setSending(false);
     }
   };
 
@@ -117,9 +128,16 @@ export function SupportModal({ visible, defaultEmail, onClose }: Props) {
             />
 
             {error ? <Text style={styles.error}>{error}</Text> : null}
+            {sent ? (
+              <Text style={styles.success}>¡Gracias! Recibimos tu consulta y te responderemos pronto.</Text>
+            ) : null}
 
-            <TouchableOpacity style={styles.submit} onPress={submit}>
-              <Text style={styles.submitText}>Preparar envío de soporte</Text>
+            <TouchableOpacity
+              style={[styles.submit, sending && styles.submitDisabled]}
+              onPress={submit}
+              disabled={sending}
+            >
+              <Text style={styles.submitText}>{sending ? 'Enviando...' : 'Enviar consulta'}</Text>
             </TouchableOpacity>
           </ScrollView>
         </Pressable>
@@ -178,6 +196,8 @@ const styles = StyleSheet.create({
   },
   textarea: { borderRadius: 12, minHeight: 100 },
   error: { color: '#E53935', fontSize: 13, marginTop: 12 },
+  success: { color: '#2E7D32', fontSize: 13, marginTop: 12 },
+  submitDisabled: { opacity: 0.6 },
   submit: {
     backgroundColor: '#111111',
     borderRadius: 22,

@@ -53,7 +53,9 @@ const callFunction = async (payload: Record<string, unknown>): Promise<Record<st
       (typeof result.error === 'string' && result.error) ||
       (typeof result.message === 'string' && result.message) ||
       'No se pudo obtener la respuesta de la IA.';
-    if (result.code === 'limit') throw new QuestionLimitError(message);
+    if (result.code === 'limit' || result.code === 'assessment_quota') {
+      throw new QuestionLimitError(message);
+    }
     throw new Error(message);
   }
   return result;

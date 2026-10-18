@@ -24,7 +24,7 @@ const MAX_HISTORY = 12;
 const MAX_DAILY_QUESTIONS = 5;
 const ASSESSMENT_TURNS = 5;
 // Cambiar a true para reactivar el límite diario al terminar las pruebas.
-const ENFORCE_DAILY_QUESTION_LIMIT = false;
+const ENFORCE_DAILY_QUESTION_LIMIT = true;
 type Level = 'A1' | 'A2' | 'B1' | 'B2' | 'C1' | 'C2';
 type Skill = (typeof SKILLS)[number];
 

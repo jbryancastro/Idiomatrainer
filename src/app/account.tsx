@@ -1,6 +1,7 @@
 import { clearSessionUser, getSessionUser } from '@/lib/auth';
 import { getSavedLevel } from '@/lib/speech-analysis';
 import { SupportModal } from '@/components/support-modal';
+import { SubscriptionModal } from '@/components/subscription-modal';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -41,6 +42,7 @@ export default function AccountScreen() {
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [supportOpen, setSupportOpen] = useState(false);
+  const [subscriptionOpen, setSubscriptionOpen] = useState(false);
   const [level, setLevel] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,6 +64,10 @@ export default function AccountScreen() {
     }
     if (id === 'config') {
       router.push('/settings');
+      return;
+    }
+    if (id === 'suscripcion') {
+      setSubscriptionOpen(true);
       return;
     }
     if (id === 'ayuda') {
@@ -133,6 +139,7 @@ export default function AccountScreen() {
           );
         })}
       </View>
+      <SubscriptionModal visible={subscriptionOpen} onClose={() => setSubscriptionOpen(false)} />
       <SupportModal
         visible={supportOpen}
         defaultEmail={userEmail}

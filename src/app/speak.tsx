@@ -1,5 +1,7 @@
 import {
   ASSESSMENT_TURNS,
+  fetchQuestionsUsed,
+  QuestionLimitError,
   sendVoiceTurn,
   type ChatTurn,
   type ConversationAssessment,
@@ -29,6 +31,8 @@ import * as Speech from 'expo-speech';
 import { useEffect, useRef, useState } from 'react';
 import {
     ScrollView,
+    Modal,
+    Pressable,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -107,6 +111,8 @@ export default function SpeakScreen() {
 
   const [level, setLevel] = useState<SpeechAnalysis['level'] | null>(null);
   const [levelLoaded, setLevelLoaded] = useState(false);
+  const [questionsUsed, setQuestionsUsed] = useState(0);
+  const [limitOpen, setLimitOpen] = useState(false);
   const [assessment, setAssessment] = useState<ConversationAssessment | null>(null);
   const [assessmentTransition, setAssessmentTransition] = useState<{
     from: SpeechAnalysis['level'];
@@ -164,6 +170,16 @@ export default function SpeakScreen() {
       active = false;
     };
   }, [exerciseGreeting, practiceMode, simulation]);
+
+  useEffect(() => {
+    let active = true;
+    fetchQuestionsUsed()
+      .then((used) => active && setQuestionsUsed(used))
+      .catch((usageError: unknown) => console.warn('Could not load question usage', usageError));
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const updateStatus = (next: Status) => {
     statusRef.current = next;
@@ -293,6 +309,7 @@ export default function SpeakScreen() {
       const {
         userText,
         reply,
+        used: usedAfterTurn,
         assessment: finalAssessment,
       } = await sendVoiceTurn(
         recorder.uri,
@@ -302,6 +319,7 @@ export default function SpeakScreen() {
         practiceMode ? practiceSessionRef.current ?? undefined : assessmentSessionRef.current ?? undefined
       );
       if (practiceMode) practiceSessionRef.current = null;
+      setQuestionsUsed(usedAfterTurn);
       if (isFinalTurn && !finalAssessment) {
         throw new Error('La IA no completó la evaluación. Inténtalo de nuevo.');
       }
@@ -361,6 +379,12 @@ export default function SpeakScreen() {
         );
         practiceSessionRef.current = null;
       }
+      if (err instanceof QuestionLimitError) {
+        setQuestionsUsed(ASSESSMENT_TURNS);
+        setLimitOpen(true);
+        updateStatus('idle');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'No se pudo obtener la respuesta.');
       updateStatus('idle');
     }
@@ -373,6 +397,10 @@ export default function SpeakScreen() {
       return;
     }
     if (!level || (!targetLevel && !practiceMode) || assessment) return;
+    if (questionsUsed >= ASSESSMENT_TURNS) {
+      setLimitOpen(true);
+      return;
+    }
     startListening();
   };
 
@@ -429,27 +457,17 @@ export default function SpeakScreen() {
           </View>
           <Text style={styles.usageIcon}>{practiceMode ? '🧩' : '🎯'}</Text>
         </View>
-        {practiceMode ? (
-          <Text style={styles.practiceHint}>
-            {exerciseTitle
-              ? `Ejercicio enfocado en: ${exerciseTitle}`
-              : 'Conversación abierta: practica a tu ritmo.'}
+        <View style={styles.usageRow}>
+          <Text style={styles.usageLabel}>Preguntas utilizadas</Text>
+          <Text style={styles.usageCount}>
+            {Math.min(questionsUsed, ASSESSMENT_TURNS)} de {ASSESSMENT_TURNS}
           </Text>
-        ) : (
-          <>
-            <View style={styles.usageRow}>
-              <Text style={styles.usageLabel}>Respuestas completadas</Text>
-              <Text style={styles.usageCount}>
-                {Math.min(answeredTurns, ASSESSMENT_TURNS)} de {ASSESSMENT_TURNS}
-              </Text>
-            </View>
-            <View style={styles.segments}>
-              {Array.from({ length: ASSESSMENT_TURNS }, (_, i) => (
-                <View key={i} style={[styles.segment, i < answeredTurns && styles.segmentFilled]} />
-              ))}
-            </View>
-          </>
-        )}
+        </View>
+        <View style={styles.segments}>
+          {Array.from({ length: ASSESSMENT_TURNS }, (_, i) => (
+            <View key={i} style={[styles.segment, i < questionsUsed && styles.segmentFilled]} />
+          ))}
+        </View>
       </View>
 
       {!loading && !level && (
@@ -470,6 +488,46 @@ export default function SpeakScreen() {
           </Text>
         </View>
       )}
+
+      <Modal
+        visible={limitOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setLimitOpen(false)}
+      >
+        <Pressable style={styles.limitBackdrop} onPress={() => setLimitOpen(false)}>
+          <Pressable style={styles.limitCard} onPress={() => {}}>
+            <Text style={styles.limitEmoji}>⏳</Text>
+            <Text style={styles.limitTitle}>Llegaste a tu límite</Text>
+            <Text style={styles.limitText}>
+              Usaste tus {ASSESSMENT_TURNS} preguntas de hoy. Vuelve cuando se renueve tu límite de
+              24 horas o{' '}
+              <Text
+                style={styles.limitLink}
+                onPress={() => {
+                  setLimitOpen(false);
+                  router.push('/plans');
+                }}
+              >
+                mejora tu plan
+              </Text>
+              .
+            </Text>
+            <TouchableOpacity
+              style={styles.limitPrimary}
+              onPress={() => {
+                setLimitOpen(false);
+                router.push('/plans');
+              }}
+            >
+              <Text style={styles.limitPrimaryText}>Mejorar mi plan</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setLimitOpen(false)}>
+              <Text style={styles.limitSecondary}>Entendido</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* CHAT */}
       <ScrollView
@@ -702,6 +760,35 @@ const styles = StyleSheet.create({
   segments: { flexDirection: 'row', gap: 6 },
   segment: { flex: 1, height: 8, borderRadius: 4, backgroundColor: '#E5E7EB' },
   segmentFilled: { backgroundColor: '#2F6BFF' },
+  limitBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 20,
+  },
+  limitCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 24,
+    alignItems: 'center',
+  },
+  limitEmoji: { fontSize: 36, marginBottom: 8 },
+  limitTitle: { fontSize: 19, fontWeight: '800', color: '#111827', marginBottom: 10 },
+  limitText: { fontSize: 14, color: '#4B5563', textAlign: 'center', lineHeight: 21 },
+  limitLink: { color: '#2F6BFF', fontWeight: '800', textDecorationLine: 'underline' },
+  limitPrimary: {
+    alignSelf: 'stretch',
+    backgroundColor: '#2F6BFF',
+    borderRadius: 22,
+    paddingVertical: 13,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  limitPrimaryText: { color: '#FFFFFF', fontSize: 14, fontWeight: '700' },
+  limitSecondary: { color: '#6B7280', fontSize: 14, fontWeight: '600', marginTop: 14 },
   practiceHint: {
     marginTop: 12,
     fontSize: 12,
